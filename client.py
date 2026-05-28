@@ -1,64 +1,67 @@
-import logging  # Import the logging module
-from typing import Any
+import asyncio
+import logging
+import os
 from uuid import uuid4
 
 import httpx
-
-from a2a.client import A2ACardResolver, A2AClient
-from a2a.types import (AgentCard, MessageSendParams, SendMessageRequest,
-                       SendStreamingMessageRequest)
-from fastmcp import Client
-from fastmcp.client.transports import StreamableHttpTransport
-import asyncio
 from databricks.sdk.core import Config
-import json
-config = Config(profile="Oauth")
-token = config.oauth_token().access_token
 
-async def main():
+from a2a.client import A2ACardResolver, ClientConfig, ClientFactory
+from a2a.helpers import new_text_message
+from a2a.types import Role, SendMessageRequest
+
+
+# Where the local A2A server is reachable. Override with A2A_BASE_URL when running
+# against a deployed Databricks App.
+BASE_URL = os.environ.get("A2A_BASE_URL", "http://localhost:8000/api")
+CARD_PATH = "/.well-known/agent-card.json"
+PROFILE = os.environ.get("DATABRICKS_PROFILE", "DEFAULT")
+
+
+async def main() -> None:
     logging.basicConfig(level=logging.INFO)
-    logger = logging.getLogger(__name__)  # Get a logger instance
+    logger = logging.getLogger(__name__)
 
-    base_url = 'https://databricks-a2a-mcp-1444828305810485.aws.databricksapps.com/api'
-    
-    async with httpx.AsyncClient(timeout=100) as httpx_client:
-        # Initialize A2ACardResolver
+    # Local runs hit localhost without auth; remote runs need a Databricks OAuth token.
+    headers: dict[str, str] = {}
+    if not BASE_URL.startswith("http://localhost"):
+        token = Config(profile=PROFILE).oauth_token().access_token
+        headers["Authorization"] = f"Bearer {token}"
+
+    async with httpx.AsyncClient(timeout=100, headers=headers) as httpx_client:
         resolver = A2ACardResolver(
             httpx_client=httpx_client,
-            base_url=base_url,
+            base_url=BASE_URL,
+            agent_card_path=CARD_PATH,
         )
-        headers = {"Authorization": f"Bearer {token}"}
-        agent_card = (
-                await resolver.get_agent_card(
-                    http_kwargs={'headers': headers},
-                )
-            ) 
+        agent_card = await resolver.get_agent_card()
         print(agent_card)
 
-        client_a2a = A2AClient(
-            httpx_client=httpx_client, agent_card=agent_card
+        factory = ClientFactory(
+            ClientConfig(httpx_client=httpx_client, streaming=True)
         )
+        client = factory.create(agent_card)
+        logger.info("A2A Client initialized.")
 
-        logger.info("A2AClient initialized.")
-
-        send_message_payload: dict[str, Any] = {
-            'message': {
-                'role': 'user',
-                'parts': [
-                    {'kind': 'text', 'text': 'List top 3 distribution centers by demand.'}
-                ],
-                'messageId': uuid4().hex,
-            },
-        }
-        request = SendMessageRequest(
-            params=MessageSendParams(**send_message_payload)
+        message = new_text_message(
+            "Compare top-rated businesses in Saint Paul.",
+            role=Role.ROLE_USER,
         )
+        message.message_id = uuid4().hex
+        request = SendMessageRequest(message=message)
 
-        response = await client_a2a.send_message(request,http_kwargs={"headers": headers})
-        print(response.model_dump(mode='json', exclude_none=True))
-       
+        async for chunk in client.send_message(request):
+            if chunk.HasField("message"):
+                for part in chunk.message.parts:
+                    if part.text:
+                        print(f"agent: {part.text}")
+            elif chunk.HasField("status_update"):
+                print(f"status: {chunk.status_update.status.state}")
+            elif chunk.HasField("artifact_update"):
+                print(f"artifact: {chunk.artifact_update.artifact}")
+            elif chunk.HasField("task"):
+                print(f"task: {chunk.task.id} ({chunk.task.status.state})")
 
-if __name__ == '__main__':
-    import asyncio
 
+if __name__ == "__main__":
     asyncio.run(main())
