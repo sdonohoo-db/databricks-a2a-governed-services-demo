@@ -2,6 +2,10 @@ command:
 - "python"
 - "server.py"
 
+# All other config (MCP_BACKEND, GENIE_SPACE_ID, UC_FUNCTIONS_CATALOG,
+# UC_FUNCTIONS_SCHEMA, LLM_ENDPOINT_NAME) is per-deployment and must be set
+# in the App's environment at deploy time, or passed via
+# `databricks apps run-local --env KEY=VALUE` for local runs. See README.md.
 env:
-- name: "SPACE_ID"
-  value: "01f03bcefff614e6a6de93a688fa37d8"
+- name: "DATABRICKS_APP_URL"
+  value: "http://localhost:8000"

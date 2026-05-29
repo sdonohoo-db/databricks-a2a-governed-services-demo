@@ -1,40 +1,68 @@
-from a2a.server.agent_execution import AgentExecutor, RequestContext
-from a2a.server.events import EventQueue
-from a2a.utils import new_agent_text_message
-import json
-from contextlib import asynccontextmanager
-import json
-import uuid
 import asyncio
+import json
+import os
+import uuid
+from contextlib import asynccontextmanager
 from typing import Any, Callable, List
-from pydantic import BaseModel
 
 import mlflow
-from mlflow.pyfunc import ResponsesAgent
-from mlflow.types.responses import ResponsesAgentRequest, ResponsesAgentResponse
-
-from databricks_mcp import DatabricksOAuthClientProvider
 from databricks.sdk import WorkspaceClient
+from databricks_mcp import DatabricksOAuthClientProvider
 from mcp.client.session import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
+from mlflow.pyfunc import ResponsesAgent
+from mlflow.types.responses import ResponsesAgentRequest, ResponsesAgentResponse
+from pydantic import BaseModel
 
-LLM_ENDPOINT_NAME = "databricks-claude-3-7-sonnet"
+from a2a.helpers import new_text_message
+from a2a.server.agent_execution import AgentExecutor, RequestContext
+from a2a.server.events import EventQueue
+from a2a.types import Role
+
+LLM_ENDPOINT_NAME = os.environ.get("LLM_ENDPOINT_NAME", "databricks-claude-sonnet-4-6")
 SYSTEM_PROMPT = "You are a helpful assistant."
 
-# No need profile in Databricks Apps, need the profile in Databricks CLI
-# DATABRICKS_CLI_PROFILE = "e2-demo-field-eng"
-# workspace_client = WorkspaceClient(profile=DATABRICKS_CLI_PROFILE)
+# In Databricks Apps the workspace identity is provided by the runtime; locally the
+# `databricks apps run-local` CLI injects the same env vars from the active profile.
 workspace_client = WorkspaceClient()
 host = workspace_client.config.host
-MCP_SERVER_URLS = [
-    f"{host}/api/2.0/mcp/genie/01f058258b7c1139953d7d6646c0b048"
-]
+
+
+def _build_mcp_server_urls() -> List[str]:
+    """Resolve the Databricks-managed MCP endpoint(s) from env vars.
+
+    Two backends are supported:
+      MCP_BACKEND=genie     → /api/2.0/mcp/genie/{GENIE_SPACE_ID}
+      MCP_BACKEND=functions → /api/2.0/mcp/functions/{UC_FUNCTIONS_CATALOG}/{UC_FUNCTIONS_SCHEMA}
+    """
+    backend = os.environ.get("MCP_BACKEND", "genie").lower()
+    if backend == "genie":
+        space_id = os.environ.get("GENIE_SPACE_ID")
+        if not space_id:
+            raise RuntimeError(
+                "MCP_BACKEND=genie requires GENIE_SPACE_ID to be set "
+                "(the Genie space ID to expose as MCP tools)."
+            )
+        return [f"{host}/api/2.0/mcp/genie/{space_id}"]
+    if backend == "functions":
+        catalog = os.environ.get("UC_FUNCTIONS_CATALOG")
+        schema = os.environ.get("UC_FUNCTIONS_SCHEMA")
+        if not catalog or not schema:
+            raise RuntimeError(
+                "MCP_BACKEND=functions requires UC_FUNCTIONS_CATALOG and "
+                "UC_FUNCTIONS_SCHEMA to be set (the Unity Catalog scope whose "
+                "functions become MCP tools)."
+            )
+        return [f"{host}/api/2.0/mcp/functions/{catalog}/{schema}"]
+    raise RuntimeError(
+        f"Unknown MCP_BACKEND={backend!r}. Set MCP_BACKEND to 'genie' or 'functions'."
+    )
+
+
+MCP_SERVER_URLS = _build_mcp_server_urls()
+
 
 def _to_chat_messages(msg: dict[str, Any]) -> List[dict]:
-    """
-    Take a single ResponsesAgent‐style dict and turn it into one or more
-    ChatCompletions‐compatible dict entries.
-    """
     msg_type = msg.get("type")
     if msg_type == "function_call":
         return [
@@ -70,7 +98,6 @@ def _to_chat_messages(msg: dict[str, Any]) -> List[dict]:
             }
         ]
     else:
-        # fallback for plain {"role": ..., "content": "..."} or similar
         return [
             {
                 k: v
@@ -80,7 +107,6 @@ def _to_chat_messages(msg: dict[str, Any]) -> List[dict]:
         ]
 
 
-# 3) “MCP SESSION” + TOOL‐INVOCATION LOGIC
 @asynccontextmanager
 async def _mcp_session(server_url: str, ws: WorkspaceClient):
     async with streamablehttp_client(
@@ -95,6 +121,7 @@ def _list_tools(server_url: str, ws: WorkspaceClient):
     async def inner():
         async with _mcp_session(server_url, ws) as sess:
             return await sess.list_tools()
+
     return asyncio.run(inner())
 
 
@@ -106,7 +133,9 @@ def _make_exec_fn(
             async with _mcp_session(server_url, ws) as sess:
                 resp = await sess.call_tool(name=tool_name, arguments=kwargs)
                 return "".join([c.text for c in resp.content])
+
         return asyncio.run(call_it())
+
     return exec_fn
 
 
@@ -139,12 +168,8 @@ def _fetch_tool_infos(ws: WorkspaceClient, server_url: str) -> List[ToolInfo]:
     return infos
 
 
-# 4) “SINGLE‐TURN” AGENT CLASS
 class SingleTurnMCPAgent(ResponsesAgent):
     def _call_llm(self, history: List[dict], ws: WorkspaceClient, tool_infos):
-        """
-        Send current history → LLM, returning the raw response dict.
-        """
         client = ws.serving_endpoints.get_open_ai_client()
         flat_msgs = []
         for msg in history:
@@ -159,12 +184,10 @@ class SingleTurnMCPAgent(ResponsesAgent):
     def predict(self, request: ResponsesAgentRequest) -> ResponsesAgentResponse:
         ws = WorkspaceClient()
 
-        # 1) build initial history: system + user
         history: List[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
         for inp in request.input:
             history.append(inp.model_dump())
 
-        # 2) call LLM once
         tool_infos = [
             tool_info
             for mcp_server_url in MCP_SERVER_URLS
@@ -178,7 +201,6 @@ class SingleTurnMCPAgent(ResponsesAgent):
 
         tool_calls = raw_choice.get("tool_calls") or []
         if tool_calls:
-            # (we only support a single tool in this “single‐turn” example)
             fc = tool_calls[0]
             name = fc["function"]["name"]
             args = json.loads(fc["function"]["arguments"])
@@ -188,7 +210,6 @@ class SingleTurnMCPAgent(ResponsesAgent):
             except Exception as e:
                 result = f"Error invoking {name}: {e}"
 
-            # 4) append the “tool” output
             history.append(
                 {
                     "type": "function_call_output",
@@ -199,7 +220,6 @@ class SingleTurnMCPAgent(ResponsesAgent):
                 }
             )
 
-            # 5) call LLM a second time and treat that reply as final
             followup = (
                 self._call_llm(history, ws, tool_infos=[]).choices[0].message.to_dict()
             )
@@ -218,7 +238,6 @@ class SingleTurnMCPAgent(ResponsesAgent):
                 custom_outputs=request.custom_inputs,
             )
 
-        # 6) if no tool_calls at all, return the assistant’s original reply
         assistant_text = raw_choice.get("content", "")
         return ResponsesAgentResponse(
             output=[
@@ -235,11 +254,9 @@ class SingleTurnMCPAgent(ResponsesAgent):
 
 mlflow.models.set_model(SingleTurnMCPAgent())
 
-class GenieAgentExecutor(AgentExecutor):
-    """Test AgentProxy Implementation."""
 
-    def __init__(self):
-        pass
+class DatabricksMCPAgentExecutor(AgentExecutor):
+    """A2A executor that delegates each user message to SingleTurnMCPAgent."""
 
     async def execute(
         self,
@@ -251,13 +268,17 @@ class GenieAgentExecutor(AgentExecutor):
         )
         loop = asyncio.get_running_loop()
         resp = await loop.run_in_executor(None, SingleTurnMCPAgent().predict, req)
+
         result = ""
         for item in resp.output:
             if item.role == "assistant":
                 result += item.content[0]["text"] + "\n"
-        event_queue.enqueue_event(new_agent_text_message(result))
+
+        await event_queue.enqueue_event(
+            new_text_message(result.strip(), role=Role.ROLE_AGENT)
+        )
 
     async def cancel(
         self, context: RequestContext, event_queue: EventQueue
     ) -> None:
-        raise Exception('cancel not supported')
+        raise RuntimeError("cancel not supported")

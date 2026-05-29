@@ -1,73 +1,152 @@
-# Connecting Databricks Managed MCP Server and A2A (Agent2Agent Communication)
+# Databricks A2A + Managed MCP Sample
 
-## Overview
+A single A2A agent that exposes a Databricks-managed MCP server as remote tooling. Demonstrates how the [A2A protocol](https://github.com/a2aproject/a2a-python) (agent-to-agent runtime communication) and [MCP](https://modelcontextprotocol.io) (model-tool plumbing) compose: A2A is the wire between agents, MCP is what one of those agents reaches for to actually do work.
 
-This project demonstrates how the Model Context Protocol (MCP) and the Agent2Agent (A2A) protocol work together to enable a dynamic, extensible agent ecosystem. Combining A2A and MCP protocols enables the development of interoperable AI systems. In such architectures:
+This repo ships **one** A2A agent. The MCP backend it talks to is selectable at runtime — point it at a Genie space or at a Unity Catalog functions schema. In a real deployment you would have many such agents fronted by an orchestrator; that wider topology is illustrated below.
 
-- **Agent Discovery and Collaboration**: A2A allows agents to discover each other and collaborate on tasks.
-- **Tool and Data Access**: MCP enables agents to access necessary tools and data sources to fulfill their tasks.
+## Architecture
 
+```mermaid
+flowchart LR
+    subgraph local["Local / dev machine"]
+        client["client.py<br/>(or any A2A client / orchestrator)"]
+    end
 
-## Key Concepts
+    subgraph apps["Databricks Apps"]
+        server["server.py<br/>A2A server (Starlette + JSON-RPC)"]
+        executor["agent_executor.py<br/>DatabricksMCPAgentExecutor"]
+        server -- "execute(context, queue)" --> executor
+    end
 
-- **MCP (Model Context Protocol)**: Acts as a centralized registry for all discoverable agents, tools, and resources. Any agent or client can query the MCP server to find available resources and retrieve their metadata (Agent Cards).
-- **A2A (Agent2Agent Protocol)**: Defines the standard for how agents communicate with each other at runtime. Once an agent discovers another agent (like Genie) via MCP, it uses A2A to send tasks, receive results, and coordinate workflows.
+    subgraph dbx["Databricks workspace"]
+        mcp["Managed MCP endpoint<br/>genie space _or_ UC functions schema"]
+        llm["Foundation Model<br/>serving endpoint"]
+        backend["Genie space _or_<br/>UC functions"]
+    end
 
-## How Databricks Managed MCP server and A2A Work Together
-
-**Architecture Illustration:**
-
-- **Orchestrator Agent**
-  - Central coordinator.
-  - Discovers and manages remote agents using the A2A (Agent2Agent) protocol.
-  - Runs locally in development, remotely in production.
-
-- **Remote Agents (A, B, ...)**
-  - Each remote agent runs as an A2A server, typically on Databricks Apps.
-  - Each agent is accessible via the A2A protocol.
-  - Each agent has access to a Databricks MCP server, which they use for specific tool calls or data processing,for example, genie space.
-
-**Technical Flow:**
-- The orchestrator agent uses the A2A protocol to discover and communicate with each remote agent.
-- Remote agents expose endpoints via the A2A protocol.
-- Each remote agent can make calls to its own Databricks MCP server to execute workloads or fetch data, for example, genie space.
-
-![](./a2a-mcp.png)
-
-- The A2A protocol enables both discovery and secure communication between the orchestrator agent and multiple remote agents. Each remote agent, running as an A2A server on Databricks, has access to its local Databricks MCP server for executing remote tool calls. 
-
-## How To Use the Code
-
-- `server.py`: Exposes the Genie Agent by creating an `AgentCard` in local default '/.well-known/agent.json' public agent path and make it accessible via A2A client request.
-- `agent_executor.py`: Connects the Genie Agent logic to the Databricks managed MCP server, so requests routed to the Genie Agent endpoint are handled by Databricks managed MCP server for genie space.
-- `client.py`: Example of how an agent or client can discover the Genie Agent via public agent card and interact with it using A2A.
-
-## Deploy A2A server on Databricks Apps
-   Deploy below four code files on Databricks Apps:
-   - `server.py`
-   - `agent_executor.py`
-   - `app.yaml`
-   - `requirements.txt`
-   For how to create a Databricks apps in detail, see [documentation](https://docs.databricks.com/aws/en/dev-tools/databricks-apps/) here.
-![](./a2a-server.png)
-
-
-## Running the client.py code either in local or remote apps.
-
-When you run it in local IDE, make sure to set up the Databricks Oauth u2m profile through Databricks CLI. See [documentation](https://docs.databricks.com/aws/en/dev-tools/cli/authentication) here
-
-`databricks auth login --host <workspace-url>`
-
-`config = Config(profile="Your profile name")`
-
-Replace the base_url `https://a2a-server-your-app-name.aws.databricksapps.com/api` with the a2a server url deployed on Databricks apps.
-
-Running the code and you will get back a response, after executing the Databricks genie MCP tool on a A2A server.
-```
-$ python3 client.py
-```
-```
-capabilities=AgentCapabilities(pushNotifications=None, stateTransitionHistory=None, streaming=True) defaultInputModes=['text'] defaultOutputModes=['text'] description='genie agent' documentationUrl=None name='genie-agent' provider=None security=None securitySchemes=None skills=[AgentSkill(description='returns genie information', examples=['List top 3 distribution centers.'], id='genie', inputModes=None, name='Returns genie information', outputModes=None, tags=['genie'])] supportsAuthenticatedExtendedCard=False url='https://a2a-server-your-url.aws.databricksapps.com/api/a2a' version='1.0.0'
-{'id': '49cecb18-95cb-41ea-a9ad-23ca5de6b195', 'jsonrpc': '2.0', 'result': {'kind': 'message', 'messageId': '248ec442-267b-4026-9f77-2c4fd3bd462e', 'parts': [{'kind': 'text', 'text': 'Based on the data analysis, here are the top 3 distribution centers by total demand:\n\n1. Distribution Center 4: 19,350 units\n2. Distribution Center 2: 18,930 units\n3. Distribution Center 3: 18,245 units\n\nThese distribution centers handle the highest volume of product demand in the network, making them critical nodes in the supply chain infrastructure.\n'}], 'role': 'agent'}}
+    client -- "GET /api/.well-known/agent-card.json" --> server
+    client -- "POST /api/a2a (JSON-RPC stream)" --> server
+    executor -- "list_tools / call_tool<br/>(streamable HTTP, OAuth)" --> mcp
+    executor -- "chat.completions w/ tool specs" --> llm
+    mcp --> backend
 ```
 
+The orchestrator pattern in the broader A2A ecosystem looks like this — each remote agent is a copy of the box above, possibly with a different MCP backend:
+
+```mermaid
+flowchart LR
+    orch["Orchestrator agent"] -- A2A --> a1["Remote agent A<br/>Genie-backed"]
+    orch -- A2A --> a2["Remote agent B<br/>UC-functions-backed"]
+    orch -- A2A --> a3["Remote agent C<br/>Vector Search"]
+    a1 -- MCP --> m1[(Genie MCP)]
+    a2 -- MCP --> m2[(UC Functions MCP)]
+    a3 -- MCP --> m3[(Vector Search MCP)]
+```
+
+## Per-request flow
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as client.py
+    participant S as A2A server (server.py)
+    participant E as DatabricksMCPAgentExecutor
+    participant M as Databricks MCP (Genie or UC functions)
+    participant L as LLM endpoint
+
+    C->>S: GET /api/.well-known/agent-card.json
+    S-->>C: AgentCard (supported_interfaces[JSONRPC])
+    C->>S: POST /api/a2a — SendMessageRequest (streaming)
+    S->>E: execute(context, event_queue)
+    E->>M: list_tools()
+    M-->>E: [tool specs]
+    E->>L: chat.completions(messages, tools=[...])
+    L-->>E: tool_call(name, arguments)
+    E->>M: call_tool(name, args)
+    M-->>E: tool result
+    E->>L: chat.completions(messages + tool result)
+    L-->>E: final assistant text
+    E->>S: await event_queue.enqueue_event(new_text_message(text))
+    S-->>C: StreamResponse(message=...)
+```
+
+This is a **single-turn** executor — at most one tool call per request. The two LLM round-trips are visible in `agent_executor.py:SingleTurnMCPAgent.predict`.
+
+## Files
+
+- `server.py` — composes the `AgentCard` and mounts `create_agent_card_routes` + `create_jsonrpc_routes` on a `Starlette` app. The card's URL is built from `DATABRICKS_APP_URL`; the skill description adapts to the configured backend.
+- `agent_executor.py` — bridges A2A → Databricks. Translates each MCP tool into an OpenAI-compatible function spec, forwards to a Databricks-served LLM, runs at most one tool call, returns the assistant text via `event_queue.enqueue_event`.
+- `client.py` — minimal A2A 1.0 client: resolves the agent card, opens a streaming JSON-RPC connection, prints whichever `StreamResponse` field the server emits.
+- `app.yaml` — Databricks Apps entry point declaration with the env-var contract.
+- `requirements.txt` — direct deps only; the AppKit runner injects its own broader stack.
+
+## Configuration
+
+The server reads its config entirely from environment variables, so the same code runs locally and on Databricks Apps.
+
+| Variable | Required | Default | Notes |
+|---|---|---|---|
+| `DATABRICKS_APP_URL` | yes | — | Public URL the agent card advertises. `http://localhost:8000` for local; the App's hostname when deployed. |
+| `MCP_BACKEND` | no | `genie` | `genie` or `functions`. |
+| `GENIE_SPACE_ID` | if `MCP_BACKEND=genie` | — | The Genie space whose data becomes MCP tools. |
+| `UC_FUNCTIONS_CATALOG` | if `MCP_BACKEND=functions` | — | UC catalog name. |
+| `UC_FUNCTIONS_SCHEMA` | if `MCP_BACKEND=functions` | — | UC schema name; every function in it becomes a tool. |
+| `LLM_ENDPOINT_NAME` | no | `databricks-claude-sonnet-4-6` | Must be a `llm/v1/chat` endpoint that exists pay-per-token on the workspace. |
+
+`client.py` also honours `A2A_BASE_URL` (default `http://localhost:8000/api`), `DATABRICKS_PROFILE` (default `DEFAULT`, used for OAuth on remote URLs), and `PROMPT` (default `"List top 3 distribution centers."`).
+
+## Run locally
+
+Prereqs: Databricks CLI ≥ 1.0, an authenticated CLI profile (`databricks auth login --host <workspace-url>`), and `uv` on `PATH`.
+
+Genie backend:
+
+```bash
+databricks apps run-local \
+  --prepare-environment \
+  --env DATABRICKS_APP_URL=http://localhost:8000 \
+  --env MCP_BACKEND=genie \
+  --env GENIE_SPACE_ID=<your-genie-space-id> \
+  -p <profile>
+```
+
+UC functions backend:
+
+```bash
+databricks apps run-local \
+  --prepare-environment \
+  --env DATABRICKS_APP_URL=http://localhost:8000 \
+  --env MCP_BACKEND=functions \
+  --env UC_FUNCTIONS_CATALOG=<catalog> \
+  --env UC_FUNCTIONS_SCHEMA=<schema> \
+  -p <profile>
+```
+
+This boots the app on `:8000` and a CLI proxy on `:8001`. In a second shell:
+
+```bash
+PROMPT="List top 3 distribution centers." uv run python client.py
+```
+
+Expected (truncated):
+
+```
+INFO:httpx:HTTP Request: GET http://localhost:8000/api/.well-known/agent-card.json "HTTP/1.1 200 OK"
+INFO:__main__:A2A Client initialized.
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/a2a "HTTP/1.1 200 OK"
+name: "databricks-mcp-agent"
+...
+agent: Based on the data, the top 3 distribution centers by total demand are ...
+```
+
+If you sit behind a TLS-intercepting corporate proxy, prefix every uv-touching command with `UV_NATIVE_TLS=1`.
+
+## Deploy to Databricks Apps
+
+The four files needed by Databricks Apps are `server.py`, `agent_executor.py`, `app.yaml`, `requirements.txt`. In the App's environment, override `DATABRICKS_APP_URL` to its public hostname (e.g. `https://<app-name>-<workspace-id>.aws.databricksapps.com`) and set the backend env vars. See the [Databricks Apps docs](https://docs.databricks.com/aws/en/dev-tools/databricks-apps/) for the create/deploy flow.
+
+For remote clients, set `A2A_BASE_URL=https://<app-url>/api` before running `client.py` — the client switches to OAuth bearer auth automatically when the base URL is non-localhost.
+
+## Notes on a2a-sdk version
+
+This repo targets `a2a-sdk[http-server]==1.0.3` and is not compatible with the 0.2.x patterns from earlier revisions of this sample (no `A2AStarletteApplication`, no top-level `AgentCard.url`, async `enqueue_event`, snake-case-uppercase enums). See `CLAUDE.md` for the migration delta.
