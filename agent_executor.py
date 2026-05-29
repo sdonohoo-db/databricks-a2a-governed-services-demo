@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import uuid
 from contextlib import asynccontextmanager
 from typing import Any, Callable, List
@@ -18,7 +19,7 @@ from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
 from a2a.types import Role
 
-LLM_ENDPOINT_NAME = "databricks-claude-sonnet-4-6"
+LLM_ENDPOINT_NAME = os.environ.get("LLM_ENDPOINT_NAME", "databricks-claude-sonnet-4-6")
 SYSTEM_PROMPT = "You are a helpful assistant."
 
 # In Databricks Apps the workspace identity is provided by the runtime; locally the
@@ -26,13 +27,39 @@ SYSTEM_PROMPT = "You are a helpful assistant."
 workspace_client = WorkspaceClient()
 host = workspace_client.config.host
 
-# Databricks-managed UC Functions MCP server. Each function in the schema is exposed
-# as an MCP tool; the agent picks one based on the user request.
-UC_FUNCTIONS_CATALOG = "eva_catalog_dev"
-UC_FUNCTIONS_SCHEMA = "mcp_tools"
-MCP_SERVER_URLS = [
-    f"{host}/api/2.0/mcp/functions/{UC_FUNCTIONS_CATALOG}/{UC_FUNCTIONS_SCHEMA}"
-]
+
+def _build_mcp_server_urls() -> List[str]:
+    """Resolve the Databricks-managed MCP endpoint(s) from env vars.
+
+    Two backends are supported:
+      MCP_BACKEND=genie     → /api/2.0/mcp/genie/{GENIE_SPACE_ID}
+      MCP_BACKEND=functions → /api/2.0/mcp/functions/{UC_FUNCTIONS_CATALOG}/{UC_FUNCTIONS_SCHEMA}
+    """
+    backend = os.environ.get("MCP_BACKEND", "genie").lower()
+    if backend == "genie":
+        space_id = os.environ.get("GENIE_SPACE_ID")
+        if not space_id:
+            raise RuntimeError(
+                "MCP_BACKEND=genie requires GENIE_SPACE_ID to be set "
+                "(the Genie space ID to expose as MCP tools)."
+            )
+        return [f"{host}/api/2.0/mcp/genie/{space_id}"]
+    if backend == "functions":
+        catalog = os.environ.get("UC_FUNCTIONS_CATALOG")
+        schema = os.environ.get("UC_FUNCTIONS_SCHEMA")
+        if not catalog or not schema:
+            raise RuntimeError(
+                "MCP_BACKEND=functions requires UC_FUNCTIONS_CATALOG and "
+                "UC_FUNCTIONS_SCHEMA to be set (the Unity Catalog scope whose "
+                "functions become MCP tools)."
+            )
+        return [f"{host}/api/2.0/mcp/functions/{catalog}/{schema}"]
+    raise RuntimeError(
+        f"Unknown MCP_BACKEND={backend!r}. Set MCP_BACKEND to 'genie' or 'functions'."
+    )
+
+
+MCP_SERVER_URLS = _build_mcp_server_urls()
 
 
 def _to_chat_messages(msg: dict[str, Any]) -> List[dict]:
@@ -228,7 +255,7 @@ class SingleTurnMCPAgent(ResponsesAgent):
 mlflow.models.set_model(SingleTurnMCPAgent())
 
 
-class UCToolsAgentExecutor(AgentExecutor):
+class DatabricksMCPAgentExecutor(AgentExecutor):
     """A2A executor that delegates each user message to SingleTurnMCPAgent."""
 
     async def execute(

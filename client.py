@@ -16,6 +16,7 @@ from a2a.types import Role, SendMessageRequest
 BASE_URL = os.environ.get("A2A_BASE_URL", "http://localhost:8000/api")
 CARD_PATH = "/.well-known/agent-card.json"
 PROFILE = os.environ.get("DATABRICKS_PROFILE", "DEFAULT")
+USER_PROMPT = os.environ.get("PROMPT", "List top 3 distribution centers.")
 
 
 async def main() -> None:
@@ -43,10 +44,7 @@ async def main() -> None:
         client = factory.create(agent_card)
         logger.info("A2A Client initialized.")
 
-        message = new_text_message(
-            "Compare top-rated businesses in Saint Paul.",
-            role=Role.ROLE_USER,
-        )
+        message = new_text_message(USER_PROMPT, role=Role.ROLE_USER)
         message.message_id = uuid4().hex
         request = SendMessageRequest(message=message)
 

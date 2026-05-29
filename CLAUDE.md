@@ -6,18 +6,34 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A reference implementation showing one A2A agent (`a2a-sdk` 1.0) wrapped around a Databricks-managed MCP server. Three files do the work:
 
-- `server.py` — composes the A2A `AgentCard` and mounts JSON-RPC + agent-card routes on a `Starlette` app. The card's `supported_interfaces[0].url` is built from the `DATABRICKS_APP_URL` env var, so the public URL must be injected at runtime (via `app.yaml` for Databricks Apps, via the CLI's `--env` flag for local).
-- `agent_executor.py` — `UCToolsAgentExecutor.execute()` is the A2A entry point. Each request is delegated synchronously (via `run_in_executor`) to `SingleTurnMCPAgent.predict()`, which: opens an MCP `streamablehttp_client` against the Databricks-managed UC Functions MCP endpoint (`/api/2.0/mcp/functions/{catalog}/{schema}`), translates each MCP tool into an OpenAI-compatible function spec, calls the Databricks LLM serving endpoint, runs at most one tool call, calls the LLM a second time, and returns the assistant text. Single-turn only — no multi-step tool use.
-- `client.py` — resolves the agent card via `A2ACardResolver`, builds a streaming `Client` with `ClientFactory`, sends a single message, and prints whichever `StreamResponse` field comes back (`message`, `status_update`, `artifact_update`, or `task`). Reads `A2A_BASE_URL` so the same file works locally and remotely; injects a Databricks OAuth bearer token only when the base URL is non-localhost.
+- `server.py` — composes the A2A `AgentCard` and mounts JSON-RPC + agent-card routes on a `Starlette` app. The card's `supported_interfaces[0].url` is built from the `DATABRICKS_APP_URL` env var, so the public URL must be injected at runtime (via `app.yaml` for Databricks Apps, via the CLI's `--env` flag for local). The skill description adapts to whichever MCP backend is selected.
+- `agent_executor.py` — `DatabricksMCPAgentExecutor.execute()` is the A2A entry point. Each request is delegated synchronously (via `run_in_executor`) to `SingleTurnMCPAgent.predict()`, which: opens an MCP `streamablehttp_client` against the configured Databricks-managed MCP endpoint, translates each MCP tool into an OpenAI-compatible function spec, calls the Databricks LLM serving endpoint, runs at most one tool call, calls the LLM a second time, and returns the assistant text. Single-turn only — no multi-step tool use.
+- `client.py` — resolves the agent card via `A2ACardResolver`, builds a streaming `Client` with `ClientFactory`, sends a single message, and prints whichever `StreamResponse` field comes back (`message`, `status_update`, `artifact_update`, or `task`). Reads `A2A_BASE_URL` so the same file works locally and remotely; injects a Databricks OAuth bearer token only when the base URL is non-localhost. The user prompt is read from `PROMPT`.
 
-The MCP backend is configured via `UC_FUNCTIONS_CATALOG`/`UC_FUNCTIONS_SCHEMA` constants in `agent_executor.py`. Each UC function in that schema becomes a tool the LLM can call.
+The MCP backend is selected entirely via env vars — `agent_executor._build_mcp_server_urls()` reads `MCP_BACKEND` (`genie` or `functions`) and either `GENIE_SPACE_ID` or `UC_FUNCTIONS_CATALOG`/`UC_FUNCTIONS_SCHEMA`. No catalog/schema/space ID is hard-coded.
 
 ## Local run
+
+UC functions backend (verified end-to-end on the user's DEFAULT profile against `eva_catalog_dev.mcp_tools`):
 
 ```bash
 UV_NATIVE_TLS=1 databricks apps run-local \
   --prepare-environment \
   --env DATABRICKS_APP_URL=http://localhost:8000 \
+  --env MCP_BACKEND=functions \
+  --env UC_FUNCTIONS_CATALOG=eva_catalog_dev \
+  --env UC_FUNCTIONS_SCHEMA=mcp_tools \
+  -p DEFAULT
+```
+
+Genie backend (drop in a real `GENIE_SPACE_ID`):
+
+```bash
+UV_NATIVE_TLS=1 databricks apps run-local \
+  --prepare-environment \
+  --env DATABRICKS_APP_URL=http://localhost:8000 \
+  --env MCP_BACKEND=genie \
+  --env GENIE_SPACE_ID=<space-id> \
   -p DEFAULT
 ```
 
