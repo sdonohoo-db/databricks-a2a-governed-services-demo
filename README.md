@@ -1,15 +1,19 @@
 # Databricks A2A + Managed MCP Sample
 
-A single A2A agent that exposes a Databricks-managed MCP server as remote tooling. Demonstrates how the [A2A protocol](https://github.com/a2aproject/a2a-python) (agent-to-agent runtime communication) and [MCP](https://modelcontextprotocol.io) (model-tool plumbing) compose: A2A is the wire between agents, MCP is what one of those agents reaches for to actually do work.
+A customer-facing interoperability example: a Google Agent Development Kit (ADK) orchestrator discovers and consumes governed Databricks services through the open [A2A protocol](https://github.com/a2aproject/a2a-python). The Google agent remains the enterprise entry point; Databricks is a remote A2A provider backed by Model Serving and managed MCP connections to Unity Catalog functions, with optional Genie support.
 
-This repo ships **one** A2A agent. The MCP backend it talks to is selectable at runtime — point it at a Genie space or at a Unity Catalog functions schema. In a real deployment you would have many such agents fronted by an orchestrator; that wider topology is illustrated below.
+The boundary is deliberate: Google ADK never needs Databricks-specific tool implementations. It retrieves the standard Agent Card, chooses the remote agent from its advertised skills, and delegates over A2A. Databricks keeps authentication, governance, data access, MCP, and model execution behind that interface.
+
+For the customer-facing talk track and exact proof sequence, see [`DEMO.md`](DEMO.md).
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-    subgraph local["Local / dev machine"]
-        client["client.py<br/>(or any A2A client / orchestrator)"]
+    subgraph google["Customer agentic enterprise on Google"]
+        user["User / business workflow"]
+        client["Google ADK + Gemini<br/>enterprise orchestrator"]
+        user --> client
     end
 
     subgraph apps["Databricks Apps"]
@@ -19,28 +23,27 @@ flowchart LR
     end
 
     subgraph dbx["Databricks workspace"]
-        mcp["Managed MCP endpoint<br/>genie space _or_ UC functions schema"]
+        mcp["Managed MCP endpoint<br/>UC functions (+ optional Genie)"]
         llm["Foundation Model<br/>serving endpoint"]
-        backend["Genie space _or_<br/>UC functions"]
+        backend["Governed UC functions<br/>(+ optional Genie space)"]
     end
 
-    client -- "GET /api/.well-known/agent-card.json" --> server
-    client -- "POST /api/a2a (JSON-RPC stream)" --> server
+    client -- "1. Discover Agent Card" --> server
+    client -- "2. Delegate via A2A JSON-RPC" --> server
     executor -- "list_tools / call_tool<br/>(streamable HTTP, OAuth)" --> mcp
     executor -- "chat.completions w/ tool specs" --> llm
     mcp --> backend
 ```
 
-The orchestrator pattern in the broader A2A ecosystem looks like this — each remote agent is a copy of the box above, possibly with a different MCP backend:
+The same Google orchestrator can combine Databricks with other remote A2A agents without moving the orchestration layer:
 
 ```mermaid
 flowchart LR
-    orch["Orchestrator agent"] -- A2A --> a1["Remote agent A<br/>Genie-backed"]
-    orch -- A2A --> a2["Remote agent B<br/>UC-functions-backed"]
-    orch -- A2A --> a3["Remote agent C<br/>Vector Search"]
-    a1 -- MCP --> m1[(Genie MCP)]
-    a2 -- MCP --> m2[(UC Functions MCP)]
-    a3 -- MCP --> m3[(Vector Search MCP)]
+    orch["Google ADK orchestrator"] -- A2A --> dbx["Databricks enterprise<br/>services agent"]
+    orch -- A2A --> other["Other enterprise<br/>A2A agent"]
+    dbx -- MCP --> m1[(Genie)]
+    dbx -- MCP --> m2[(UC Functions)]
+    dbx --> m3[(Model Serving)]
 ```
 
 ## Per-request flow
@@ -48,7 +51,7 @@ flowchart LR
 ```mermaid
 sequenceDiagram
     autonumber
-    participant C as client.py
+    participant C as Google ADK RemoteA2aAgent
     participant S as A2A server (server.py)
     participant E as DatabricksMCPAgentExecutor
     participant M as Databricks MCP (Genie or UC functions)
@@ -74,10 +77,13 @@ This is a **single-turn** executor — at most one tool call per request. The tw
 
 ## Files
 
-- `server.py` — composes the `AgentCard` and mounts `create_agent_card_routes` + `create_jsonrpc_routes` on a `Starlette` app. The card's URL is built from `DATABRICKS_APP_URL`; the skill description adapts to the configured backend.
-- `agent_executor.py` — bridges A2A → Databricks. Translates each MCP tool into an OpenAI-compatible function spec, forwards to a Databricks-served LLM, runs at most one tool call, returns the assistant text via `event_queue.enqueue_event`.
+- `server.py` — composes the `AgentCard` and mounts `create_agent_card_routes` + `create_jsonrpc_routes` on a `Starlette` app. It uses the injected `DATABRICKS_APP_URL` for the advertised JSON-RPC endpoint, and the card lists each configured Databricks capability.
+- `agent_executor.py` — bridges A2A → Databricks. It discovers tools from every configured MCP service, namespaces their names to prevent collisions, forwards them to a Databricks-served LLM, runs at most one tool call, and returns the assistant text via `event_queue.enqueue_event`.
+- `databricks_config.py` — validates multi-backend environment configuration, constructs managed MCP URLs, and validates the advertised App URL.
 - `client.py` — minimal A2A 1.0 client: resolves the agent card, opens a streaming JSON-RPC connection, prints whichever `StreamResponse` field the server emits.
+- `google_adk_consumer/agent.py` — Google ADK/Gemini orchestrator using `RemoteA2aAgent` to discover and delegate to the Databricks App.
 - `app.yaml` — Databricks Apps entry point declaration with the env-var contract.
+- `databricks.yml` — deploys the App and binds its Model Serving and UC Function resources with least-privilege permissions.
 - `requirements.txt` — direct deps only; the AppKit runner injects its own broader stack.
 
 ## Configuration
@@ -86,14 +92,16 @@ The server reads its config entirely from environment variables, so the same cod
 
 | Variable | Required | Default | Notes |
 |---|---|---|---|
-| `DATABRICKS_APP_URL` | yes | — | Public URL the agent card advertises. `http://localhost:8000` for local; the App's hostname when deployed. |
-| `MCP_BACKEND` | no | `genie` | `genie` or `functions`. |
-| `GENIE_SPACE_ID` | if `MCP_BACKEND=genie` | — | The Genie space whose data becomes MCP tools. |
-| `UC_FUNCTIONS_CATALOG` | if `MCP_BACKEND=functions` | — | UC catalog name. |
-| `UC_FUNCTIONS_SCHEMA` | if `MCP_BACKEND=functions` | — | UC schema name; every function in it becomes a tool. |
+| `DATABRICKS_APP_URL` | yes | — | Public URL that the Agent Card advertises. Use `http://localhost:8000` locally and the Databricks App URL when deployed. |
+| `MCP_BACKENDS` | no | auto-detect | Comma-separated `genie`, `functions`, or `genie,functions`. |
+| `MCP_BACKEND` | no | auto-detect | Backward-compatible single-backend selector. Ignored when `MCP_BACKENDS` is set. |
+| `GENIE_SPACE_ID` | for Genie | — | The Genie space whose data becomes MCP tools. |
+| `UC_FUNCTION_NAME` | for deployed UC Functions | — | Authorized function FQN; its catalog/schema become the managed MCP scope. |
+| `UC_FUNCTIONS_CATALOG` | for local/legacy UC Functions | — | UC catalog name when `UC_FUNCTION_NAME` is not set. |
+| `UC_FUNCTIONS_SCHEMA` | for local/legacy UC Functions | — | UC schema name when `UC_FUNCTION_NAME` is not set. |
 | `LLM_ENDPOINT_NAME` | no | `databricks-claude-sonnet-4-6` | Must be a `llm/v1/chat` endpoint that exists pay-per-token on the workspace. |
 
-`client.py` also honours `A2A_BASE_URL` (default `http://localhost:8000/api`), `DATABRICKS_PROFILE` (default `DEFAULT`, used for OAuth on remote URLs), and `PROMPT` (default `"List top 3 distribution centers."`).
+`client.py` also honours `A2A_BASE_URL` (default `http://localhost:8000/api`), `DATABRICKS_PROFILE` (required for remote OAuth), and `PROMPT` (defaults to a governed shipping-quote request).
 
 ## Run locally
 
@@ -122,10 +130,23 @@ databricks apps run-local \
   -p <profile>
 ```
 
+Both MCP backends:
+
+```bash
+databricks apps run-local \
+  --prepare-environment \
+  --env DATABRICKS_APP_URL=http://localhost:8000 \
+  --env MCP_BACKENDS=genie,functions \
+  --env GENIE_SPACE_ID=<your-genie-space-id> \
+  --env UC_FUNCTIONS_CATALOG=<catalog> \
+  --env UC_FUNCTIONS_SCHEMA=<schema> \
+  --profile <profile>
+```
+
 This boots the app on `:8000` and a CLI proxy on `:8001`. In a second shell:
 
 ```bash
-PROMPT="List top 3 distribution centers." uv run python client.py
+PROMPT="Give me a governed shipping quote from Boston to Chicago for 25 kilograms." uv run python client.py
 ```
 
 Expected (truncated):
@@ -134,18 +155,84 @@ Expected (truncated):
 INFO:httpx:HTTP Request: GET http://localhost:8000/api/.well-known/agent-card.json "HTTP/1.1 200 OK"
 INFO:__main__:A2A Client initialized.
 INFO:httpx:HTTP Request: POST http://localhost:8000/api/a2a "HTTP/1.1 200 OK"
-name: "databricks-mcp-agent"
+name: "databricks-enterprise-services"
 ...
-agent: Based on the data, the top 3 distribution centers by total demand are ...
+agent: The governed quote from Boston to Chicago for 25 kg is ...
 ```
 
 If you sit behind a TLS-intercepting corporate proxy, prefix every uv-touching command with `UV_NATIVE_TLS=1`.
 
 ## Deploy to Databricks Apps
 
-The four files needed by Databricks Apps are `server.py`, `agent_executor.py`, `app.yaml`, `requirements.txt`. In the App's environment, override `DATABRICKS_APP_URL` to its public hostname (e.g. `https://<app-name>-<workspace-id>.aws.databricksapps.com`) and set the backend env vars. See the [Databricks Apps docs](https://docs.databricks.com/aws/en/dev-tools/databricks-apps/) for the create/deploy flow.
+The baseline deployment uses a governed UC function plus a Databricks Model Serving endpoint. Create the demo function with `setup/create_demo_function.sql` in the target workspace's SQL editor, or run the file through the default warehouse after authenticating:
 
-For remote clients, set `A2A_BASE_URL=https://<app-url>/api` before running `client.py` — the client switches to OAuth bearer auth automatically when the base URL is non-localhost.
+```bash
+databricks experimental aitools tools query \
+  "$(< setup/create_demo_function.sql)" \
+  --profile fevm-sdonohoo-demotest
+```
+
+Alternatively, replace the bundle variable with an existing function FQN.
+
+`databricks.yml` declares the Model Serving endpoint and UC function as App resources. Deployment automatically grants the App service principal `CAN_QUERY` and `EXECUTE`, respectively:
+
+```bash
+databricks apps deploy -t demo \
+  --var='uc_function_name=main.default.a2a_demo_shipping_quote' \
+  --var='llm_endpoint_name=<chat-endpoint>' \
+  --profile <profile>
+```
+
+The `demo` target advertises `https://databricks-a2a-elements-7474653063456586.aws.databricksapps.com`, the deterministic URL for this app name in `fevm-sdonohoo-demotest`. After deployment, confirm it with `databricks apps get databricks-a2a-elements --profile fevm-sdonohoo-demotest --output json`.
+
+For remote clients, set the URL and an explicit profile. The client first retrieves and prints the A2A card, then follows the card's JSON-RPC interface URL to query the Databricks-backed service:
+
+```bash
+A2A_BASE_URL=https://<app-url>/api \
+DATABRICKS_PROFILE=<profile> \
+PROMPT="Use an available Databricks capability and explain the result." \
+UV_NATIVE_TLS=1 uv run --native-tls python client.py
+```
+
+## Demonstrate consumption from Google ADK
+
+The Google-side example is intentionally a separate dependency set; none of its packages are deployed into the Databricks App. Authenticate to Google Cloud and the Databricks workspace, then launch ADK:
+
+First, make capability discovery visible:
+
+```bash
+DATABRICKS_A2A_APP_URL=https://<app-url> \
+DATABRICKS_PROFILE=fevm-sdonohoo-demotest \
+UV_NATIVE_TLS=1 uv run --native-tls \
+  --with-requirements requirements-google-adk.txt \
+  python -m google_adk_consumer.discover
+```
+
+Then launch the Google orchestrator:
+
+```bash
+GOOGLE_GENAI_USE_VERTEXAI=TRUE \
+GOOGLE_CLOUD_PROJECT=<gcp-project> \
+GOOGLE_CLOUD_LOCATION=us-central1 \
+DATABRICKS_A2A_APP_URL=https://<app-url> \
+DATABRICKS_PROFILE=fevm-sdonohoo-demotest \
+UV_NATIVE_TLS=1 uv run --native-tls \
+  --with-requirements requirements-google-adk.txt \
+  adk web .
+```
+
+In the ADK UI, select `google_adk_consumer` and use a prompt that requires a Databricks capability, for example:
+
+> Ask the Databricks agent what governed capabilities it provides, then use the appropriate capability to answer: `<customer-specific data question>`.
+
+The visible proof sequence is:
+
+1. Google ADK resolves the Databricks Agent Card over HTTPS.
+2. Gemini sees `databricks_enterprise_services` as a remote sub-agent and delegates.
+3. The request crosses only the standard A2A JSON-RPC interface.
+4. Databricks selects Genie or a UC function through managed MCP and returns the answer over A2A.
+
+For the local demonstration, `DatabricksOAuth` reads the explicitly named CLI profile. In Google Cloud, omit `DATABRICKS_PROFILE` and provide `DATABRICKS_HOST`, `DATABRICKS_CLIENT_ID`, and `DATABRICKS_CLIENT_SECRET` through the customer's secret manager. The same helper then uses Databricks OAuth machine-to-machine authentication; the A2A interface and ADK agent definition do not change.
 
 ## Notes on a2a-sdk version
 

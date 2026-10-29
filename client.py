@@ -15,8 +15,11 @@ from a2a.types import Role, SendMessageRequest
 # against a deployed Databricks App.
 BASE_URL = os.environ.get("A2A_BASE_URL", "http://localhost:8000/api")
 CARD_PATH = "/.well-known/agent-card.json"
-PROFILE = os.environ.get("DATABRICKS_PROFILE", "DEFAULT")
-USER_PROMPT = os.environ.get("PROMPT", "List top 3 distribution centers.")
+PROFILE = os.environ.get("DATABRICKS_PROFILE")
+USER_PROMPT = os.environ.get(
+    "PROMPT",
+    "Give me a governed shipping quote from Boston to Chicago for 25 kilograms.",
+)
 
 
 async def main() -> None:
@@ -26,6 +29,10 @@ async def main() -> None:
     # Local runs hit localhost without auth; remote runs need a Databricks OAuth token.
     headers: dict[str, str] = {}
     if not BASE_URL.startswith("http://localhost"):
+        if not PROFILE:
+            raise RuntimeError(
+                "Set DATABRICKS_PROFILE explicitly when querying a deployed app."
+            )
         token = Config(profile=PROFILE).oauth_token().access_token
         headers["Authorization"] = f"Bearer {token}"
 

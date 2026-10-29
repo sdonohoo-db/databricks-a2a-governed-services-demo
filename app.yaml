@@ -2,10 +2,15 @@ command:
 - "python"
 - "server.py"
 
-# All other config (MCP_BACKEND, GENIE_SPACE_ID, UC_FUNCTIONS_CATALOG,
-# UC_FUNCTIONS_SCHEMA, LLM_ENDPOINT_NAME) is per-deployment and must be set
-# in the App's environment at deploy time, or passed via
-# `databricks apps run-local --env KEY=VALUE` for local runs. See README.md.
+# The bundle binds each valueFrom key to a workspace resource. For local runs,
+# override these values with `databricks apps run-local --env KEY=VALUE` as
+# shown in README.md.
 env:
 - name: "DATABRICKS_APP_URL"
   value: "http://localhost:8000"
+- name: "MCP_BACKENDS"
+  value: "functions"
+- name: "UC_FUNCTION_NAME"
+  valueFrom: "uc-function"
+- name: "LLM_ENDPOINT_NAME"
+  valueFrom: "serving-endpoint"

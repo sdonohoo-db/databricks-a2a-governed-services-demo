@@ -4,13 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A reference implementation showing one A2A agent (`a2a-sdk` 1.0) wrapped around a Databricks-managed MCP server. Three files do the work:
+A reference implementation showing a Google ADK/Gemini orchestrator consuming governed Databricks services through A2A (`a2a-sdk` 1.0). Databricks hosts the remote A2A provider and keeps Model Serving plus managed MCP access to UC Functions (and optionally Genie) behind the protocol boundary.
 
-- `server.py` — composes the A2A `AgentCard` and mounts JSON-RPC + agent-card routes on a `Starlette` app. The card's `supported_interfaces[0].url` is built from the `DATABRICKS_APP_URL` env var, so the public URL must be injected at runtime (via `app.yaml` for Databricks Apps, via the CLI's `--env` flag for local). The skill description adapts to whichever MCP backend is selected.
-- `agent_executor.py` — `DatabricksMCPAgentExecutor.execute()` is the A2A entry point. Each request is delegated synchronously (via `run_in_executor`) to `SingleTurnMCPAgent.predict()`, which: opens an MCP `streamablehttp_client` against the configured Databricks-managed MCP endpoint, translates each MCP tool into an OpenAI-compatible function spec, calls the Databricks LLM serving endpoint, runs at most one tool call, calls the LLM a second time, and returns the assistant text. Single-turn only — no multi-step tool use.
-- `client.py` — resolves the agent card via `A2ACardResolver`, builds a streaming `Client` with `ClientFactory`, sends a single message, and prints whichever `StreamResponse` field comes back (`message`, `status_update`, `artifact_update`, or `task`). Reads `A2A_BASE_URL` so the same file works locally and remotely; injects a Databricks OAuth bearer token only when the base URL is non-localhost. The user prompt is read from `PROMPT`.
+- `server.py` — composes the A2A `AgentCard` and mounts JSON-RPC + agent-card routes on a `Starlette` app. The card's `supported_interfaces[0].url` is built from the required `DATABRICKS_APP_URL` env var. It advertises Model Serving plus each configured MCP capability.
+- `agent_executor.py` — `DatabricksMCPAgentExecutor.execute()` is the A2A entry point. Each request is delegated synchronously (via `run_in_executor`) to `SingleTurnMCPAgent.predict()`, which discovers tools from every configured managed MCP server, namespaces tool names, calls the Databricks LLM serving endpoint, runs at most one tool call, calls the LLM a second time, and returns the assistant text. Single-turn only — no multi-step tool use.
+- `google_adk_consumer/` — the customer-side proof. Google ADK uses `RemoteA2aAgent` and an authenticated A2A `ClientFactory` to discover the Databricks Agent Card and delegate through standard A2A. `discover.py` prints the card before the demo.
+- `client.py` — framework-neutral A2A validation client. It resolves the card, sends one streaming request, and prints every possible response field. Remote use requires an explicit `DATABRICKS_PROFILE`.
 
-The MCP backend is selected entirely via env vars — `agent_executor._build_mcp_server_urls()` reads `MCP_BACKEND` (`genie` or `functions`) and either `GENIE_SPACE_ID` or `UC_FUNCTIONS_CATALOG`/`UC_FUNCTIONS_SCHEMA`. No catalog/schema/space ID is hard-coded.
+MCP configuration lives in `databricks_config.py`. `MCP_BACKENDS` can select `genie`, `functions`, or both; legacy `MCP_BACKEND` remains supported. UC Functions can be scoped with injected `UC_FUNCTION_NAME` or legacy `UC_FUNCTIONS_CATALOG`/`UC_FUNCTIONS_SCHEMA`.
 
 ## Local run
 
@@ -82,9 +83,9 @@ databricks serving-endpoints list -p DEFAULT --output json | \
 
 ## Deploying to Databricks Apps
 
-Out of scope of the local-run instructions above, but the `app.yaml` `command:` and `env:` blocks are what `databricks apps deploy` uses. For deployment, override `DATABRICKS_APP_URL` to the actual app URL (e.g. `https://<app>-<workspace-id>.aws.databricksapps.com`) so the agent card advertises the correct public endpoint. The `WorkspaceClient()` in the executor picks up auth from the App's runtime identity (no profile needed in-cluster); locally, the CLI injects the same env from the active `-p` profile.
+`databricks.yml` defines the deployable `demo` target for `fevm-sdonohoo-demotest`, including the concrete public App URL and least-privilege bindings for Model Serving (`CAN_QUERY`) and the demo UC function (`EXECUTE`). The `WorkspaceClient()` in the executor picks up the App service principal automatically. See `DEMO.md` for the Google-side proof sequence.
 
 ## Git remotes
 
-- `origin` → `thijs-hakkenberg/databricks_a2a_mcp_connection` (the user's fork; push here)
+- `origin` → `sdonohoo-db/databricks_a2a_mcp_connection` (the user's fork; push here)
 - `upstream` → `vivian-xie-db/databricks_a2a_mcp_connection` (original sample; pull from here for upstream updates)

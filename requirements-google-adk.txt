@@ -1,0 +1,4 @@
+# Client-side demo only. These dependencies are not installed in the Databricks App.
+google-adk[a2a]>=2.9.1,<3
+databricks-sdk>=0.57.0
+httpx>=0.28.0

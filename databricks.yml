@@ -1,0 +1,50 @@
+bundle:
+  name: databricks-a2a-elements
+
+variables:
+  app_name:
+    description: Workspace-global Databricks App name
+    default: databricks-a2a-elements
+  uc_function_name:
+    description: Existing UC function FQN (catalog.schema.function)
+    default: main.default.a2a_demo_shipping_quote
+  llm_endpoint_name:
+    description: Existing chat-capable Model Serving endpoint name
+    default: databricks-claude-sonnet-4-6
+
+resources:
+  apps:
+    a2a_elements:
+      name: ${var.app_name}
+      description: A2A interface over Databricks Model Serving and UC Functions MCP
+      source_code_path: .
+      config:
+        command:
+          - python
+          - server.py
+        env:
+          - name: DATABRICKS_APP_URL
+            value: https://databricks-a2a-elements-7474653063456586.aws.databricksapps.com
+          - name: MCP_BACKENDS
+            value: functions
+          - name: UC_FUNCTION_NAME
+            value_from: uc-function
+          - name: LLM_ENDPOINT_NAME
+            value_from: serving-endpoint
+      resources:
+        - name: serving-endpoint
+          serving_endpoint:
+            name: ${var.llm_endpoint_name}
+            permission: CAN_QUERY
+        - name: uc-function
+          uc_securable:
+            securable_type: FUNCTION
+            securable_full_name: ${var.uc_function_name}
+            permission: EXECUTE
+      lifecycle:
+        started: true
+
+targets:
+  demo:
+    default: true
+    mode: development

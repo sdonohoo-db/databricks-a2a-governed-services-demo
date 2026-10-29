@@ -18,48 +18,17 @@ from a2a.helpers import new_text_message
 from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
 from a2a.types import Role
+from databricks_config import (
+    MCPServerConfig,
+    build_mcp_server_configs,
+    qualified_tool_name,
+)
 
-LLM_ENDPOINT_NAME = os.environ.get("LLM_ENDPOINT_NAME", "databricks-claude-sonnet-4-6")
-SYSTEM_PROMPT = "You are a helpful assistant."
-
-# In Databricks Apps the workspace identity is provided by the runtime; locally the
-# `databricks apps run-local` CLI injects the same env vars from the active profile.
-workspace_client = WorkspaceClient()
-host = workspace_client.config.host
-
-
-def _build_mcp_server_urls() -> List[str]:
-    """Resolve the Databricks-managed MCP endpoint(s) from env vars.
-
-    Two backends are supported:
-      MCP_BACKEND=genie     → /api/2.0/mcp/genie/{GENIE_SPACE_ID}
-      MCP_BACKEND=functions → /api/2.0/mcp/functions/{UC_FUNCTIONS_CATALOG}/{UC_FUNCTIONS_SCHEMA}
-    """
-    backend = os.environ.get("MCP_BACKEND", "genie").lower()
-    if backend == "genie":
-        space_id = os.environ.get("GENIE_SPACE_ID")
-        if not space_id:
-            raise RuntimeError(
-                "MCP_BACKEND=genie requires GENIE_SPACE_ID to be set "
-                "(the Genie space ID to expose as MCP tools)."
-            )
-        return [f"{host}/api/2.0/mcp/genie/{space_id}"]
-    if backend == "functions":
-        catalog = os.environ.get("UC_FUNCTIONS_CATALOG")
-        schema = os.environ.get("UC_FUNCTIONS_SCHEMA")
-        if not catalog or not schema:
-            raise RuntimeError(
-                "MCP_BACKEND=functions requires UC_FUNCTIONS_CATALOG and "
-                "UC_FUNCTIONS_SCHEMA to be set (the Unity Catalog scope whose "
-                "functions become MCP tools)."
-            )
-        return [f"{host}/api/2.0/mcp/functions/{catalog}/{schema}"]
-    raise RuntimeError(
-        f"Unknown MCP_BACKEND={backend!r}. Set MCP_BACKEND to 'genie' or 'functions'."
-    )
-
-
-MCP_SERVER_URLS = _build_mcp_server_urls()
+SYSTEM_PROMPT = (
+    "You are the Databricks enterprise services agent. Use the available "
+    "Databricks tools for data and function requests. Clearly distinguish "
+    "tool-backed results from general model knowledge."
+)
 
 
 def _to_chat_messages(msg: dict[str, Any]) -> List[dict]:
@@ -145,24 +114,27 @@ class ToolInfo(BaseModel):
     exec_fn: Callable
 
 
-def _fetch_tool_infos(ws: WorkspaceClient, server_url: str) -> List[ToolInfo]:
+def _fetch_tool_infos(ws: WorkspaceClient, server: MCPServerConfig) -> List[ToolInfo]:
     infos: List[ToolInfo] = []
-    mcp_tools = _list_tools(server_url, ws).tools
+    mcp_tools = _list_tools(server.url, ws).tools
     for t in mcp_tools:
         schema = t.inputSchema.copy()
         if "properties" not in schema:
             schema["properties"] = {}
+        exposed_name = qualified_tool_name(server.key, t.name)
         spec = {
             "type": "function",
             "function": {
-                "name": t.name,
-                "description": t.description,
+                "name": exposed_name,
+                "description": f"[{server.display_name}] {t.description or t.name}",
                 "parameters": schema,
             },
         }
         infos.append(
             ToolInfo(
-                name=t.name, spec=spec, exec_fn=_make_exec_fn(server_url, t.name, ws)
+                name=exposed_name,
+                spec=spec,
+                exec_fn=_make_exec_fn(server.url, t.name, ws),
             )
         )
     return infos
@@ -176,9 +148,11 @@ class SingleTurnMCPAgent(ResponsesAgent):
             flat_msgs.extend(_to_chat_messages(msg))
 
         return client.chat.completions.create(
-            model=LLM_ENDPOINT_NAME,
+            model=os.environ.get(
+                "LLM_ENDPOINT_NAME", "databricks-claude-sonnet-4-6"
+            ),
             messages=flat_msgs,
-            tools=[ti.spec for ti in tool_infos],
+            **({"tools": [ti.spec for ti in tool_infos]} if tool_infos else {}),
         )
 
     def predict(self, request: ResponsesAgentRequest) -> ResponsesAgentResponse:
@@ -190,8 +164,8 @@ class SingleTurnMCPAgent(ResponsesAgent):
 
         tool_infos = [
             tool_info
-            for mcp_server_url in MCP_SERVER_URLS
-            for tool_info in _fetch_tool_infos(ws, mcp_server_url)
+            for server in build_mcp_server_configs(os.environ, ws.config.host)
+            for tool_info in _fetch_tool_infos(ws, server)
         ]
         tools_dict = {tool_info.name: tool_info for tool_info in tool_infos}
         llm_resp = self._call_llm(history, ws, tool_infos)
@@ -228,12 +202,10 @@ class SingleTurnMCPAgent(ResponsesAgent):
             assistant_text = followup.get("content", "")
             return ResponsesAgentResponse(
                 output=[
-                    {
-                        "id": uuid.uuid4().hex,
-                        "type": "message",
-                        "role": "assistant",
-                        "content": [{"type": "output_text", "text": assistant_text}],
-                    }
+                    self.create_text_output_item(
+                        text=assistant_text,
+                        id=uuid.uuid4().hex,
+                    )
                 ],
                 custom_outputs=request.custom_inputs,
             )
@@ -241,12 +213,10 @@ class SingleTurnMCPAgent(ResponsesAgent):
         assistant_text = raw_choice.get("content", "")
         return ResponsesAgentResponse(
             output=[
-                {
-                    "id": uuid.uuid4().hex,
-                    "type": "message",
-                    "role": "assistant",
-                    "content": [{"type": "output_text", "text": assistant_text}],
-                }
+                self.create_text_output_item(
+                    text=assistant_text,
+                    id=uuid.uuid4().hex,
+                )
             ],
             custom_outputs=request.custom_inputs,
         )
