@@ -18,7 +18,7 @@ CARD_PATH = "/.well-known/agent-card.json"
 PROFILE = os.environ.get("DATABRICKS_PROFILE")
 USER_PROMPT = os.environ.get(
     "PROMPT",
-    "Give me a governed shipping quote from Boston to Chicago for 25 kilograms.",
+    "Give me a shipping quote from Boston to Chicago for 25 kilograms.",
 )
 
 

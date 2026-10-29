@@ -6,8 +6,6 @@ command:
 # override these values with `databricks apps run-local --env KEY=VALUE` as
 # shown in README.md.
 env:
-- name: "DATABRICKS_APP_URL"
-  value: "http://localhost:8000"
 - name: "MCP_BACKENDS"
   value: "functions"
 - name: "UC_FUNCTION_NAME"

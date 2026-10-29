@@ -29,6 +29,38 @@ SYSTEM_PROMPT = (
     "Databricks tools for data and function requests. Clearly distinguish "
     "tool-backed results from general model knowledge."
 )
+FOUNDATION_MODEL_SCOPE_PROMPT = (
+    "You are a Databricks interoperability advisor. Answer only questions about "
+    "A2A, MCP, Databricks AI and agent services, and enterprise agent "
+    "architecture. If a request is outside this conversational scope, briefly "
+    "state that it is outside the capability and do not answer it."
+)
+DEMO_REQUEST_KEY = "databricks_a2a_demo"
+FOUNDATION_MODEL_SKILL = "databricks-foundation-model"
+TOOL_SKILL_TO_SERVER = {
+    "uc-tools": "functions",
+    "genie": "genie",
+}
+
+
+def _decode_demo_request(user_input: str) -> tuple[str, str | None]:
+    """Read the optional client-routing convention from an A2A text message."""
+    try:
+        payload = json.loads(user_input)
+    except (TypeError, json.JSONDecodeError):
+        return user_input, None
+    if not isinstance(payload, dict):
+        return user_input, None
+    routing = payload.get(DEMO_REQUEST_KEY)
+    task = payload.get("task")
+    if not isinstance(routing, dict) or not isinstance(task, str):
+        return user_input, None
+    if routing.get("version") != 1:
+        return user_input, None
+    selected_skill_id = routing.get("selected_skill_id")
+    if not isinstance(selected_skill_id, str):
+        return user_input, None
+    return task, selected_skill_id
 
 
 def _to_chat_messages(msg: dict[str, Any]) -> List[dict]:
@@ -109,6 +141,7 @@ def _make_exec_fn(
 
 
 class ToolInfo(BaseModel):
+    server_key: str
     name: str
     spec: dict
     exec_fn: Callable
@@ -132,6 +165,7 @@ def _fetch_tool_infos(ws: WorkspaceClient, server: MCPServerConfig) -> List[Tool
         }
         infos.append(
             ToolInfo(
+                server_key=server.key,
                 name=exposed_name,
                 spec=spec,
                 exec_fn=_make_exec_fn(server.url, t.name, ws),
@@ -148,25 +182,59 @@ class SingleTurnMCPAgent(ResponsesAgent):
             flat_msgs.extend(_to_chat_messages(msg))
 
         return client.chat.completions.create(
-            model=os.environ.get(
-                "LLM_ENDPOINT_NAME", "databricks-claude-sonnet-4-6"
-            ),
+            model=os.environ["LLM_ENDPOINT_NAME"],
             messages=flat_msgs,
             **({"tools": [ti.spec for ti in tool_infos]} if tool_infos else {}),
         )
 
     def predict(self, request: ResponsesAgentRequest) -> ResponsesAgentResponse:
         ws = WorkspaceClient()
+        custom_inputs = request.custom_inputs or {}
+        selected_skill_id = custom_inputs.get("selected_skill_id")
+        if not isinstance(selected_skill_id, str):
+            selected_skill_id = None
 
         history: List[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
         for inp in request.input:
             history.append(inp.model_dump())
 
-        tool_infos = [
-            tool_info
-            for server in build_mcp_server_configs(os.environ, ws.config.host)
-            for tool_info in _fetch_tool_infos(ws, server)
-        ]
+        server_configs = build_mcp_server_configs(os.environ, ws.config.host)
+        selected_server = TOOL_SKILL_TO_SERVER.get(selected_skill_id or "")
+        if selected_skill_id == FOUNDATION_MODEL_SKILL:
+            tool_infos = []
+            history.append(
+                {"role": "system", "content": FOUNDATION_MODEL_SCOPE_PROMPT}
+            )
+        elif selected_server:
+            tool_infos = [
+                tool_info
+                for server in server_configs
+                if server.key == selected_server
+                for tool_info in _fetch_tool_infos(ws, server)
+            ]
+            history.append(
+                {
+                    "role": "system",
+                    "content": (
+                        "The client selected a tool-backed capability. Call an "
+                        "available tool only when it can genuinely satisfy the task. "
+                        "Do not answer from general model knowledge. If no tool is "
+                        "suitable, do not call a tool; the host will return a "
+                        "deterministic capability-mismatch response."
+                    ),
+                }
+            )
+        elif selected_skill_id:
+            return self._text_response(
+                f"The requested capability {selected_skill_id!r} is not available."
+            )
+        else:
+            # Plain A2A clients retain the original autonomous tool-routing behavior.
+            tool_infos = [
+                tool_info
+                for server in server_configs
+                for tool_info in _fetch_tool_infos(ws, server)
+            ]
         tools_dict = {tool_info.name: tool_info for tool_info in tool_infos}
         llm_resp = self._call_llm(history, ws, tool_infos)
         raw_choice = llm_resp.choices[0].message.to_dict()
@@ -210,6 +278,15 @@ class SingleTurnMCPAgent(ResponsesAgent):
                 custom_outputs=request.custom_inputs,
             )
 
+        if selected_server:
+            return self._text_response(
+                "This request cannot be answered using the selected Databricks "
+                "tool-backed capability. No suitable MCP tool was invoked. Choose "
+                "the Databricks interoperability advisor for questions within its "
+                "conversational scope, or ask a question that matches one of the "
+                "selected capability's advertised tools."
+            )
+
         assistant_text = raw_choice.get("content", "")
         return ResponsesAgentResponse(
             output=[
@@ -219,6 +296,13 @@ class SingleTurnMCPAgent(ResponsesAgent):
                 )
             ],
             custom_outputs=request.custom_inputs,
+        )
+
+    def _text_response(self, text: str) -> ResponsesAgentResponse:
+        return ResponsesAgentResponse(
+            output=[
+                self.create_text_output_item(text=text, id=uuid.uuid4().hex)
+            ]
         )
 
 
@@ -233,8 +317,12 @@ class DatabricksMCPAgentExecutor(AgentExecutor):
         context: RequestContext,
         event_queue: EventQueue,
     ) -> None:
+        task, selected_skill_id = _decode_demo_request(context.get_user_input())
         req = ResponsesAgentRequest(
-            input=[{"role": "user", "content": context.get_user_input()}]
+            input=[{"role": "user", "content": task}],
+            custom_inputs={"selected_skill_id": selected_skill_id}
+            if selected_skill_id
+            else None,
         )
         loop = asyncio.get_running_loop()
         resp = await loop.run_in_executor(None, SingleTurnMCPAgent().predict, req)

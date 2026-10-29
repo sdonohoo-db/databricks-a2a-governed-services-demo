@@ -1,0 +1,7 @@
+command:
+  - "python"
+  - "app.py"
+
+env:
+  - name: "A2A_PROVIDER_APP_NAME"
+    valueFrom: "a2a-provider-app"

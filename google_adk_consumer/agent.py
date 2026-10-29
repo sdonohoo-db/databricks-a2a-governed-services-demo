@@ -25,7 +25,7 @@ databricks_agent = RemoteA2aAgent(
     name="databricks_enterprise_services",
     description=(
         "Remote Databricks specialist discovered through its A2A Agent Card. "
-        "Delegate requests that need governed Databricks data, Genie analytics, "
+        "Delegate requests that need Databricks data, Genie analytics, "
         "Unity Catalog functions, or Databricks-hosted AI services."
     ),
     agent_card=f"{app_url}/api/.well-known/agent-card.json",
@@ -38,7 +38,7 @@ root_agent = Agent(
     model=os.environ.get("GOOGLE_MODEL", "gemini-2.5-flash"),
     instruction=(
         "You are the customer's Google-based enterprise orchestrator. Keep normal "
-        "reasoning in Google ADK, but delegate requests for governed Databricks "
+        "reasoning in Google ADK, but delegate requests for Databricks "
         "data or services to databricks_enterprise_services. Tell the user when "
         "a result came from the remote Databricks A2A agent."
     ),

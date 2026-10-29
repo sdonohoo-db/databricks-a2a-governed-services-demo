@@ -2,29 +2,26 @@ bundle:
   name: databricks-a2a-elements
 
 variables:
-  app_name:
-    description: Workspace-global Databricks App name
-    default: databricks-a2a-elements
+  provider_app_name:
+    description: Required workspace-global name for the headless A2A provider App
+  client_app_name:
+    description: Required workspace-global name for the A2A demonstration client App
   uc_function_name:
-    description: Existing UC function FQN (catalog.schema.function)
-    default: main.default.a2a_demo_shipping_quote
+    description: Required existing UC function FQN (catalog.schema.function)
   llm_endpoint_name:
-    description: Existing chat-capable Model Serving endpoint name
-    default: databricks-claude-sonnet-4-6
+    description: Required chat-capable Model Serving endpoint name
 
 resources:
   apps:
     a2a_elements:
-      name: ${var.app_name}
+      name: ${var.provider_app_name}
       description: A2A interface over Databricks Model Serving and UC Functions MCP
-      source_code_path: .
+      source_code_path: ./src/a2a-provider
       config:
         command:
           - python
           - server.py
         env:
-          - name: DATABRICKS_APP_URL
-            value: https://databricks-a2a-elements-7474653063456586.aws.databricksapps.com
           - name: MCP_BACKENDS
             value: functions
           - name: UC_FUNCTION_NAME
@@ -44,7 +41,26 @@ resources:
       lifecycle:
         started: true
 
+    a2a_client:
+      name: ${var.client_app_name}
+      description: Visual chat client for A2A discovery and Databricks delegation
+      source_code_path: ./src/a2a-client
+      config:
+        command:
+          - python
+          - app.py
+        env:
+          - name: A2A_PROVIDER_APP_NAME
+            value_from: a2a-provider-app
+      resources:
+        - name: a2a-provider-app
+          app:
+            name: ${resources.apps.a2a_elements.name}
+            permission: CAN_USE
+      lifecycle:
+        started: true
+
 targets:
-  demo:
+  dev:
     default: true
     mode: development

@@ -1,10 +1,16 @@
 import unittest
+from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).parents[1] / "src" / "a2a-provider"))
+sys.path.insert(0, str(Path(__file__).parents[1] / "setup"))
 
 from databricks_config import (
     build_mcp_server_configs,
     public_app_url,
     qualified_tool_name,
 )
+from render_demo_function import quote_function_name, render_sql
 
 
 class MCPConfigurationTests(unittest.TestCase):
@@ -62,9 +68,32 @@ class PublicUrlTests(unittest.TestCase):
             "https://custom.example",
         )
 
-    def test_url_is_required(self):
-        with self.assertRaisesRegex(RuntimeError, "DATABRICKS_APP_URL is required"):
+    def test_url_is_derived_from_forwarded_headers(self):
+        self.assertEqual(
+            public_app_url(
+                {},
+                {
+                    "x-forwarded-proto": "https",
+                    "x-forwarded-host": "my-app.example.com",
+                },
+            ),
+            "https://my-app.example.com",
+        )
+
+    def test_url_requires_configuration_or_request_host(self):
+        with self.assertRaisesRegex(RuntimeError, "Unable to determine"):
             public_app_url({})
+
+
+class DemoFunctionTemplateTests(unittest.TestCase):
+    def test_renders_caller_supplied_function_name(self):
+        sql = render_sql("my_catalog.agent_services.shipping_quote")
+        self.assertIn("`my_catalog`.`agent_services`.`shipping_quote`", sql)
+        self.assertNotIn("{{FUNCTION_NAME}}", sql)
+
+    def test_function_name_must_have_three_parts(self):
+        with self.assertRaisesRegex(ValueError, "three non-empty parts"):
+            quote_function_name("catalog.schema")
 
 
 if __name__ == "__main__":

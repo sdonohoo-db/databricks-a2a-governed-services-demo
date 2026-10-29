@@ -97,12 +97,24 @@ def qualified_tool_name(server_key: str, tool_name: str) -> str:
     return f"{normalized[:53]}_{digest}"
 
 
-def public_app_url(env: Mapping[str, str]) -> str:
-    """Return the public URL that the A2A card must advertise."""
+def public_app_url(
+    env: Mapping[str, str],
+    headers: Mapping[str, str] | None = None,
+    request_scheme: str = "http",
+) -> str:
+    """Return the configured URL or derive it from reverse-proxy headers."""
     app_url = env.get("DATABRICKS_APP_URL", "").rstrip("/")
-    if not app_url:
-        raise RuntimeError(
-            "DATABRICKS_APP_URL is required so the Agent Card advertises a "
-            "client-reachable JSON-RPC endpoint."
-        )
-    return app_url
+    if app_url:
+        return app_url
+
+    headers = headers or {}
+    host = headers.get("x-forwarded-host") or headers.get("host")
+    if host:
+        scheme = headers.get("x-forwarded-proto") or request_scheme
+        # Proxies may append comma-separated forwarding hops.
+        return f"{scheme.split(',')[0].strip()}://{host.split(',')[0].strip()}"
+
+    raise RuntimeError(
+        "Unable to determine the public App URL. Set DATABRICKS_APP_URL for "
+        "local execution or provide Host/X-Forwarded-Host request headers."
+    )

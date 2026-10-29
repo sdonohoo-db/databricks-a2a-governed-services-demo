@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Google A2A Client Simulator</title>
+  <style>
+    :root { color-scheme: dark; --bg:#07111f; --panel:#0d1c30; --panel2:#112741; --line:rgba(145,180,218,.22); --text:#eef6ff; --muted:#9bb0c8; --cyan:#55d6e8; --blue:#78adff; --green:#72e0a8; --orange:#ffb66e; --red:#ff8293; }
+    * { box-sizing:border-box; }
+    body { margin:0; min-height:100vh; color:var(--text); font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:radial-gradient(circle at 22% 0%,rgba(45,103,178,.22),transparent 34rem),var(--bg); }
+    button,textarea { font:inherit; } button { border:0; cursor:pointer; } button:disabled { cursor:not-allowed; opacity:.48; }
+    .shell { width:min(100% - 32px,980px); margin:0 auto; padding:34px 0 54px; }
+    .masthead { display:flex; justify-content:space-between; align-items:flex-start; gap:24px; margin-bottom:24px; }
+    .eyebrow { color:var(--cyan); font-size:12px; font-weight:750; letter-spacing:.14em; text-transform:uppercase; }
+    h1 { margin:8px 0 10px; font-size:clamp(32px,5vw,50px); line-height:1; letter-spacing:-.045em; }
+    .subtitle { max-width:720px; color:var(--muted); font-size:16px; line-height:1.55; }
+    .identity { flex:0 0 auto; padding:10px 13px; border:1px solid var(--line); border-radius:14px; color:var(--muted); font-size:11px; } .identity strong { color:var(--text); }
+    .journey { display:grid; grid-template-columns:repeat(4,1fr); margin:0 0 20px; padding:0; list-style:none; }
+    .journey li { position:relative; color:var(--muted); font-size:11px; text-align:center; }
+    .journey li:not(:last-child)::after { content:""; position:absolute; z-index:0; top:13px; left:55%; right:-45%; height:1px; background:var(--line); }
+    .journey span { position:relative; z-index:1; display:grid; place-items:center; width:27px; height:27px; margin:0 auto 6px; border:1px solid var(--line); border-radius:50%; background:var(--panel); color:var(--muted); font-weight:750; }
+    .journey li.active { color:var(--text); } .journey li.active span { border-color:var(--cyan); color:#04141d; background:var(--cyan); }
+    .panel { margin-bottom:16px; border:1px solid var(--line); border-radius:17px; background:rgba(13,28,48,.92); overflow:hidden; }
+    .panel-head { display:flex; justify-content:space-between; align-items:center; gap:16px; padding:17px 19px; border-bottom:1px solid var(--line); }
+    .step-label { color:var(--cyan); font-size:10px; font-weight:750; letter-spacing:.12em; text-transform:uppercase; }
+    h2 { margin:3px 0 0; font-size:17px; } .panel-body { padding:19px; }
+    .status { display:inline-flex; align-items:center; gap:7px; color:var(--muted); font-size:11px; }
+    .dot { width:8px; height:8px; border-radius:50%; background:var(--orange); } .dot.ok { background:var(--green); } .dot.error { background:var(--red); }
+    .primary,.secondary { border-radius:10px; padding:10px 14px; font-weight:750; } .primary { color:#04141d; background:var(--cyan); } .secondary { color:var(--text); border:1px solid var(--line); background:#17314c; } .compact { padding:6px 9px; font-size:10px; }
+    .intro { display:flex; justify-content:space-between; align-items:center; gap:16px; } .intro p { margin:0; color:var(--muted); font-size:13px; line-height:1.5; }
+    .card-meta { margin-top:14px; color:var(--muted); font-size:11px; }
+    .services { display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:10px; margin-top:14px; }
+    .service { width:100%; padding:14px; border:1px solid var(--line); border-radius:12px; color:var(--text); background:var(--panel2); text-align:left; }
+    .service:hover { border-color:rgba(85,214,232,.55); } .service.selected { border-color:var(--cyan); box-shadow:0 0 0 2px rgba(85,214,232,.12); }
+    .service strong { display:block; font-size:13px; } .service p { margin:6px 0 0; color:var(--muted); font-size:11px; line-height:1.45; }
+    .service-id { display:block; margin-top:9px; color:var(--blue); font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:9px; }
+    .selection-note,.notice { padding:11px 12px; border:1px solid rgba(120,173,255,.22); border-radius:10px; color:var(--muted); background:rgba(120,173,255,.06); font-size:11px; line-height:1.5; } .selection-note { margin-bottom:13px; }
+    .suggestion-label { margin:0 0 8px; color:var(--muted); font-size:10px; font-weight:750; letter-spacing:.08em; text-transform:uppercase; }
+    .suggestions { display:flex; flex-wrap:wrap; gap:7px; margin-bottom:13px; }
+    .suggestion { padding:8px 10px; border:1px solid var(--line); border-radius:999px; color:var(--text); background:var(--panel2); font-size:10px; text-align:left; }
+    .suggestion:hover { border-color:var(--cyan); background:rgba(85,214,232,.08); }
+    textarea { width:100%; min-height:96px; resize:vertical; padding:13px; border:1px solid var(--line); border-radius:12px; outline:none; color:var(--text); background:#081728; line-height:1.5; }
+    textarea:focus { border-color:var(--cyan); box-shadow:0 0 0 3px rgba(85,214,232,.1); }
+    .actions { display:flex; justify-content:space-between; align-items:center; gap:14px; margin-top:11px; } .actions small { color:var(--muted); line-height:1.4; }
+    .answer { min-height:90px; color:var(--text); font-size:14px; line-height:1.58; } .answer.empty { display:grid; place-items:center; color:var(--muted); }
+    .answer p { margin:0 0 10px; } .answer p:last-child { margin-bottom:0; } .answer h1,.answer h2,.answer h3,.answer h4 { margin:16px 0 8px; line-height:1.2; } .answer h1 { font-size:21px; } .answer h2 { font-size:18px; } .answer h3,.answer h4 { font-size:15px; }
+    .answer ul,.answer ol { margin:8px 0 12px; padding-left:22px; } .answer a { color:var(--cyan); } .answer code { padding:2px 5px; border-radius:5px; background:#06111f; color:#bdebf2; } .answer pre { overflow-x:auto; white-space:pre; }
+    .answer table { width:100%; margin:12px 0; border-collapse:collapse; font-size:12px; } .answer th,.answer td { padding:7px 9px; border:1px solid var(--line); text-align:left; }
+    .verification { margin-top:14px; padding-top:10px; border-top:1px solid var(--line); color:var(--muted); font-size:10px; }
+    details.more { margin-top:16px; border:1px solid var(--line); border-radius:14px; background:rgba(13,28,48,.65); } details.more>summary { padding:14px 17px; cursor:pointer; color:var(--muted); font-size:12px; font-weight:700; } .details-body { padding:2px 17px 17px; }
+    .flow { display:grid; grid-template-columns:repeat(7,auto); align-items:center; justify-content:center; gap:8px; overflow-x:auto; padding:8px 0 18px; }
+    .node { min-width:118px; padding:11px; border:1px solid var(--line); border-radius:11px; background:var(--panel); text-align:center; } .node strong { display:block; font-size:11px; } .node small { display:block; margin-top:4px; color:var(--muted); font-size:9px; line-height:1.35; } .arrow { color:var(--cyan); font-weight:800; text-align:center; }
+    .trace-item { position:relative; padding:0 0 13px 21px; } .trace-item::before { content:""; position:absolute; left:3px; top:5px; width:8px; height:8px; border-radius:50%; background:var(--green); } .trace-item strong { font-size:11px; } .trace-item p { margin:3px 0 0; color:var(--muted); font-size:10px; line-height:1.45; word-break:break-word; } .duration { margin-left:5px; color:var(--cyan); font-size:9px; }
+    .subdetails { margin-top:12px; } .subdetails summary { cursor:pointer; color:var(--muted); font-size:10px; }
+    pre { max-height:330px; overflow:auto; padding:11px; border-radius:10px; color:#bad4ee; background:#06111f; white-space:pre-wrap; word-break:break-word; font-size:10px; }
+    .loading { animation:pulse 1.2s ease-in-out infinite; } [hidden] { display:none!important; } @keyframes pulse { 50% { opacity:.48; } }
+    @media (max-width:720px) { .shell { width:min(100% - 20px,980px); padding-top:22px; } .masthead { flex-direction:column; } .journey li { font-size:9px; } .intro,.actions { align-items:stretch; flex-direction:column; } .flow { justify-content:start; } }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header class="masthead">
+      <div><div class="eyebrow">Google enterprise → Databricks</div><h1>Google A2A Client Simulator</h1><div class="subtitle">This app behaves as a Google-hosted agent A2A client. It discovers Databricks services from a standard Agent Card, chooses an advertised capability, and delegates a task through A2A.</div></div>
+      <div class="identity"><strong id="identity-name">Loading identity…</strong><br><span id="identity-detail">Checking credential boundary</span></div>
+    </header>
+    <ol class="journey" aria-label="A2A demonstration stages">
+      <li id="journey-1" class="active"><span>1</span>Discover</li><li id="journey-2"><span>2</span>Choose service</li><li id="journey-3"><span>3</span>Delegate via A2A</li><li id="journey-4"><span>4</span>Receive response</li>
+    </ol>
+
+    <section class="panel">
+      <div class="panel-head"><div><div class="step-label">Step 1–2</div><h2>Discover and choose a Databricks service</h2></div><span class="status"><span id="card-dot" class="dot"></span><span id="card-status">Not discovered</span></span></div>
+      <div class="panel-body">
+        <div class="intro"><p>The simulated Google client reads capability metadata from <code>/.well-known/agent-card.json</code>. Nothing below is hard-coded in the browser.</p><button id="discover-button" class="primary" type="button">Discover services</button></div>
+        <div id="card-meta" class="card-meta">No Agent Card retrieved yet.</div>
+        <div id="services" class="services"><div class="notice">Discover the Agent Card to see the services Databricks advertises.</div></div>
+        <div id="card-actions" class="actions" hidden><small>Agent skills describe semantic capabilities. This demo transmits the selected capability as explicit routing intent.</small><button id="card-json-toggle" class="secondary compact" type="button">Show Agent Card JSON</button></div>
+        <div id="card-json-panel" hidden><pre id="card-json">{}</pre></div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head"><div><div class="step-label">Step 3</div><h2>Delegate a task through A2A</h2></div></div>
+      <div class="panel-body">
+        <div id="selection-note" class="selection-note">First discover and select an advertised service.</div>
+        <div id="suggestion-section" hidden><div class="suggestion-label">Suggested questions from the Agent Card</div><div id="suggestions" class="suggestions"></div></div>
+        <form id="chat-form"><textarea id="prompt" aria-label="Task to delegate">Give me a shipping quote from Boston to Chicago for 25 kilograms.</textarea><div class="actions"><small>Tool-backed capabilities must use a suitable tool or explicitly decline. The request still uses the card’s standard JSON-RPC interface.</small><button id="send-button" class="primary" type="submit" disabled>Delegate task</button></div></form>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head"><div><div class="step-label">Step 4</div><h2>Databricks A2A response</h2></div></div>
+      <div class="panel-body"><div id="answer" class="answer empty">The delegated response will appear here.</div><div id="verification" class="verification" hidden>AI-generated by the remote Databricks agent. Verify important results.</div></div>
+    </section>
+
+    <details class="more">
+      <summary>How it works · architecture and protocol trace</summary>
+      <div class="details-body">
+        <div class="flow" aria-label="A2A architecture flow"><div class="node"><strong>Google client</strong><small>Discovers + selects capability</small></div><div class="arrow">→</div><div class="node"><strong>Agent Card</strong><small>Skills + JSON-RPC URL</small></div><div class="arrow">→</div><div class="node"><strong>Databricks A2A agent</strong><small>Receives delegated task</small></div><div class="arrow">→</div><div class="node"><strong>Databricks services</strong><small>LLM + MCP / UC</small></div></div>
+        <div id="trace"><div class="notice">Run discovery or delegate a task to populate the trace.</div></div>
+        <details class="subdetails"><summary>Raw response metadata</summary><pre id="raw">{}</pre></details>
+      </div>
+    </details>
+  </main>
+
+  <script>
+    const services=document.getElementById('services'),trace=document.getElementById('trace'),raw=document.getElementById('raw'),answer=document.getElementById('answer');
+    const cardDot=document.getElementById('card-dot'),cardStatus=document.getElementById('card-status'),cardMeta=document.getElementById('card-meta');
+    const cardJsonToggle=document.getElementById('card-json-toggle'),cardJsonPanel=document.getElementById('card-json-panel'),cardJson=document.getElementById('card-json');
+    const selectionNote=document.getElementById('selection-note'),sendButton=document.getElementById('send-button'),suggestionSection=document.getElementById('suggestion-section'),suggestions=document.getElementById('suggestions');
+    let selectedSkillId=null,discoveredSkills=[];
+
+    function setJourney(stage){for(let i=1;i<=4;i+=1)document.getElementById(`journey-${i}`).classList.toggle('active',i<=stage);}
+    function setBusy(busy){document.getElementById('discover-button').disabled=busy;sendButton.disabled=busy||!selectedSkillId;}
+    function showSuggestions(examples){
+      suggestions.replaceChildren();suggestionSection.hidden=!examples.length;
+      examples.forEach(example=>{const button=document.createElement('button');button.type='button';button.className='suggestion';button.textContent=example;button.addEventListener('click',()=>{const prompt=document.getElementById('prompt');prompt.value=example;prompt.focus();});suggestions.appendChild(button);});
+    }
+    function selectSkill(skillId){
+      selectedSkillId=skillId;const skill=discoveredSkills.find(item=>item.id===skillId);
+      document.querySelectorAll('.service').forEach(button=>{const selected=button.dataset.skillId===skillId;button.classList.toggle('selected',selected);button.setAttribute('aria-pressed',String(selected));});
+      const toolBacked=skill.id!=='databricks-foundation-model';
+      selectionNote.textContent=toolBacked?`Google-side decision: require “${skill.name}”. Databricks must use a suitable tool or report that this capability cannot answer.`:`Google-side decision: use “${skill.name}”. A direct foundation-model answer is allowed within its advertised conversational scope.`;
+      showSuggestions(skill.examples||[]);
+      sendButton.disabled=false;setJourney(2);
+    }
+    function showCard(card,fullCard){
+      discoveredSkills=card.skills||[];if(selectedSkillId&&!discoveredSkills.some(skill=>skill.id===selectedSkillId))selectedSkillId=null;
+      cardDot.className='dot ok';cardStatus.textContent='Agent Card discovered';cardMeta.textContent=`${card.name} · v${card.version} · ${card.interfaces[0]?.protocol_binding||'interface unknown'}`;
+      cardJson.textContent=JSON.stringify(fullCard||card,null,2);document.getElementById('card-actions').hidden=false;services.replaceChildren();
+      if(!discoveredSkills.length){const empty=document.createElement('div');empty.className='notice';empty.textContent='The Agent Card did not advertise any skills.';services.appendChild(empty);return;}
+      discoveredSkills.forEach(skill=>{const button=document.createElement('button');button.type='button';button.className='service';button.dataset.skillId=skill.id;button.setAttribute('aria-pressed','false');const title=document.createElement('strong');title.textContent=skill.name;const desc=document.createElement('p');desc.textContent=skill.description;const id=document.createElement('span');id.className='service-id';id.textContent=skill.id;button.append(title,desc,id);button.addEventListener('click',()=>selectSkill(skill.id));services.appendChild(button);});
+      if(selectedSkillId)selectSkill(selectedSkillId);else setJourney(1);
+    }
+    function showTrace(items){trace.replaceChildren();items.forEach(item=>{const row=document.createElement('div');row.className='trace-item';const title=document.createElement('strong');title.textContent=item.step;if(item.duration_ms>0){const duration=document.createElement('span');duration.className='duration';duration.textContent=`${item.duration_ms} ms`;title.appendChild(duration);}const detail=document.createElement('p');detail.textContent=item.detail;row.append(title,detail);trace.appendChild(row);});}
+    function showError(error){const detail=error.detail||error.error||'Unknown error';cardDot.className='dot error';cardStatus.textContent='Request failed';answer.className='answer';answer.textContent=`Request failed: ${detail}`;}
+    async function callApi(path,options={}){const response=await fetch(path,options);const data=await response.json();if(!response.ok)throw data;return data;}
+
+    cardJsonToggle.addEventListener('click',()=>{cardJsonPanel.hidden=!cardJsonPanel.hidden;cardJsonToggle.textContent=cardJsonPanel.hidden?'Show Agent Card JSON':'Hide Agent Card JSON';});
+    document.getElementById('discover-button').addEventListener('click',async()=>{
+      setBusy(true);cardStatus.textContent='Discovering…';cardDot.className='dot';services.innerHTML='<div class="notice loading">Fetching the standard Agent Card from Databricks…</div>';
+      try{const data=await callApi('/api/discover');selectedSkillId=null;selectionNote.textContent='Choose one of the services discovered from the Agent Card.';showSuggestions([]);showCard(data.card,data.card_json);showTrace(data.trace);raw.textContent=JSON.stringify(data,null,2);}catch(error){showError(error);}finally{setBusy(false);}
+    });
+    document.getElementById('chat-form').addEventListener('submit',async event=>{
+      event.preventDefault();const prompt=document.getElementById('prompt').value.trim();if(!prompt||!selectedSkillId)return;
+      setBusy(true);setJourney(3);cardStatus.textContent='Delegating…';answer.className='answer empty loading';answer.textContent='Rediscovering the Agent Card, validating the selected capability, and sending the A2A request…';document.getElementById('verification').hidden=true;
+      try{const data=await callApi('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({prompt,selected_skill_id:selectedSkillId})});answer.className='answer';if(data.answer_html)answer.innerHTML=data.answer_html;else answer.textContent=data.answer||'The provider returned no text message.';document.getElementById('verification').hidden=false;showCard(data.card,data.card_json);showTrace(data.trace);raw.textContent=JSON.stringify(data,null,2);cardStatus.textContent='Response received';setJourney(4);}catch(error){showError(error);}finally{setBusy(false);}
+    });
+    callApi('/api/whoami').then(data=>{document.getElementById('identity-name').textContent=data.signed_in_user;document.getElementById('identity-detail').textContent='App-to-app OAuth stays server-side';}).catch(()=>{document.getElementById('identity-name').textContent='Identity unavailable';document.getElementById('identity-detail').textContent='Could not read forwarded identity';});
+  </script>
+</body>
+</html>

@@ -19,25 +19,42 @@ Databricks App (A2A provider)
         +-- Optional managed MCP -> Genie
 ```
 
+The bundle also deploys a visual A2A client App for rehearsal and customer
+explanation. It uses the same standards-based discovery and JSON-RPC flow as an
+external client, while displaying each observed stage and the architecture.
+
 ## Before the meeting
 
-1. Confirm the App is running:
+1. Confirm both Apps are running:
 
    ```bash
-   databricks apps get databricks-a2a-elements \
-     --profile fevm-sdonohoo-demotest --output json
+   databricks apps get <provider-app-name> \
+     --profile <profile> --output json
+   databricks apps get <client-app-name> \
+     --profile <profile> --output json
    ```
 
 2. Confirm the Google-side identity has `CAN_USE` on the App. For the local
-   demo, this is the user represented by `fevm-sdonohoo-demotest`. For a Google
-   Cloud deployment, grant the Databricks OAuth service principal used by the
-   orchestrator.
+   demo, this is the user represented by the selected CLI profile. For a
+   Google Cloud deployment, grant the Databricks OAuth service principal used
+   by the orchestrator.
 
-3. Run capability discovery from the Google side:
+3. Open the visual client and rehearse the flow:
+
+   Retrieve the URL with `databricks apps get <client-app-name>`.
+
+   Click **Discover services** first. Point out that the capabilities and
+   JSON-RPC URL came from the remote Agent Card. Select **Run Unity Catalog
+   functions**, send the shipping-quote prompt, and walk through the execution
+   trace. Then ask it to describe A2A: the tool-backed capability explicitly
+   declines because no suitable tool can answer. Select the foundation
+   model capability and repeat the question to show the intentional difference.
+
+4. Run capability discovery from the Google side:
 
    ```bash
-   DATABRICKS_A2A_APP_URL=https://databricks-a2a-elements-7474653063456586.aws.databricksapps.com \
-   DATABRICKS_PROFILE=fevm-sdonohoo-demotest \
+   DATABRICKS_A2A_APP_URL=<provider-app-url> \
+   DATABRICKS_PROFILE=<profile> \
    UV_NATIVE_TLS=1 uv run --native-tls \
      --with-requirements requirements-google-adk.txt \
      python -m google_adk_consumer.discover
@@ -47,14 +64,14 @@ Databricks App (A2A provider)
    proves discovery happens through the A2A card rather than prior knowledge in
    the Google agent.
 
-4. Start the Google ADK UI:
+5. Start the Google ADK UI:
 
    ```bash
    GOOGLE_GENAI_USE_VERTEXAI=TRUE \
    GOOGLE_CLOUD_PROJECT=<gcp-project> \
-   GOOGLE_CLOUD_LOCATION=us-central1 \
-   DATABRICKS_A2A_APP_URL=https://databricks-a2a-elements-7474653063456586.aws.databricksapps.com \
-   DATABRICKS_PROFILE=fevm-sdonohoo-demotest \
+   GOOGLE_CLOUD_LOCATION=<gcp-region> \
+   DATABRICKS_A2A_APP_URL=<provider-app-url> \
+   DATABRICKS_PROFILE=<profile> \
    UV_NATIVE_TLS=1 uv run --native-tls \
      --with-requirements requirements-google-adk.txt \
      adk web .
@@ -66,21 +83,29 @@ Use prompts tied to the actual configured Genie space and UC function.
 
 1. Discovery:
 
-   > What governed capabilities can the Databricks enterprise services agent provide?
+   > What capabilities can the Databricks enterprise services agent provide?
 
 2. UC-function-backed action:
 
-   > Ask Databricks for a governed shipping quote from Boston to Chicago for 25 kilograms.
+   > Ask Databricks for a shipping quote from Boston to Chicago for 25 kilograms.
 
-3. Optional Genie-backed analytics:
+3. Capability boundary:
+
+   > Describe the A2A protocol in a short paragraph.
+
+   With the UC-function capability selected, the visual client should receive
+   an explicit capability-mismatch response. With the foundation-model
+   capability selected, it should receive a direct model answer.
+
+4. Optional Genie-backed analytics:
 
    > Delegate to Databricks and answer: `<question grounded in the Genie space>`.
 
-4. Explain the boundary:
+5. Explain the boundary:
 
    - Google Gemini chose and delegated to a remote sub-agent.
    - The only cross-platform contract was A2A.
-   - Databricks resolved its own governed tools behind the boundary.
+   - Databricks resolved its own tools behind the boundary.
    - The Google orchestrator did not receive Databricks credentials for internal
      services, table grants, MCP tool definitions, or function implementation.
 

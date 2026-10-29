@@ -1,13 +1,13 @@
-CREATE OR REPLACE FUNCTION main.default.a2a_demo_shipping_quote(
+CREATE OR REPLACE FUNCTION {{FUNCTION_NAME}}(
   origin STRING COMMENT 'Origin city or distribution center',
   destination STRING COMMENT 'Destination city or distribution center',
   weight_kg DOUBLE COMMENT 'Shipment weight in kilograms'
 )
 RETURNS STRING
 LANGUAGE SQL
-COMMENT 'Governed demo function used by the Databricks A2A enterprise services agent.'
+COMMENT 'Demo function used by the Databricks A2A enterprise services agent.'
 RETURN CONCAT(
-  'Estimated governed quote from ',
+  'Estimated quote from ',
   origin,
   ' to ',
   destination,
