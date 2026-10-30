@@ -20,8 +20,8 @@ A2A_BASE_URL=<provider-app-url>/api \
 DATABRICKS_PROFILE=<profile> \
 PROMPT="Give me a shipping quote from Boston to Chicago for 25 kilograms." \
 UV_SYSTEM_CERTS=1 uv run --system-certs \
-  --with-requirements src/a2a-provider/requirements.txt \
-  python src/a2a-client/cli.py
+  --with-requirements tools/framework-neutral-a2a-client/requirements.txt \
+  python tools/framework-neutral-a2a-client/client.py
 ```
 
 The client obtains a short-lived Databricks OAuth token from the named profile.
@@ -35,8 +35,8 @@ not added and `A2A_BASE_URL` may be omitted:
 ```bash
 PROMPT="Explain how A2A and MCP complement each other." \
 UV_SYSTEM_CERTS=1 uv run --system-certs \
-  --with-requirements src/a2a-provider/requirements.txt \
-  python src/a2a-client/cli.py
+  --with-requirements tools/framework-neutral-a2a-client/requirements.txt \
+  python tools/framework-neutral-a2a-client/client.py
 ```
 
 The client defaults to `http://localhost:8000/api` for local execution.

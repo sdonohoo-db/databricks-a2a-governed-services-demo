@@ -3,7 +3,7 @@ from pathlib import Path
 import sys
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "src" / "a2a-provider"))
-sys.path.insert(0, str(Path(__file__).parents[1] / "setup"))
+sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
 
 from databricks_config import (
     build_mcp_server_configs,

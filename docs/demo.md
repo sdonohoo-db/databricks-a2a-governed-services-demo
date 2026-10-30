@@ -1,8 +1,8 @@
-# Customer Demo: Google ADK consumes Databricks through A2A
+# Demo walkthrough: Google ADK consumes Databricks through A2A
 
-## Message to land
+## What this demonstrates
 
-The customer's Google agentic platform stays in control. Databricks publishes a
+A Google-hosted agentic platform stays in control. Databricks publishes a
 standards-based A2A Agent Card and JSON-RPC interface. Google ADK discovers that
 interface and delegates work without embedding Databricks MCP, Genie, Unity
 Catalog, or Model Serving APIs in the Google orchestrator.
@@ -18,11 +18,11 @@ Databricks App (A2A provider + App telemetry)
         +-- Unity Gateway DBSQL MCP -> Unity Catalog function
 ```
 
-The bundle also deploys a visual A2A client App for rehearsal and customer
-explanation. It uses the same standards-based discovery and JSON-RPC flow as an
-external client, while displaying each observed stage and the architecture.
+The bundle also deploys a visual A2A client App for walking through the flow. It
+uses the same standards-based discovery and JSON-RPC flow as an external client,
+while displaying each observed stage and the architecture.
 
-## Before the meeting
+## Prepare the demo
 
 1. Confirm both Apps are running:
 
@@ -52,10 +52,11 @@ external client, while displaying each observed stage and the architecture.
 4. Run capability discovery from the Google side:
 
    ```bash
+   cd src/google-adk-consumer
    DATABRICKS_A2A_APP_URL=<provider-app-url> \
    DATABRICKS_PROFILE=<profile> \
    UV_NATIVE_TLS=1 uv run --native-tls \
-     --with-requirements requirements-google-adk.txt \
+     --with-requirements requirements.txt \
      python -m google_adk_consumer.discover
    ```
 
@@ -66,13 +67,14 @@ external client, while displaying each observed stage and the architecture.
 5. Start the Google ADK UI:
 
    ```bash
+   cd src/google-adk-consumer
    GOOGLE_GENAI_USE_VERTEXAI=TRUE \
    GOOGLE_CLOUD_PROJECT=<gcp-project> \
    GOOGLE_CLOUD_LOCATION=<gcp-region> \
    DATABRICKS_A2A_APP_URL=<provider-app-url> \
    DATABRICKS_PROFILE=<profile> \
    UV_NATIVE_TLS=1 uv run --native-tls \
-     --with-requirements requirements-google-adk.txt \
+     --with-requirements requirements.txt \
      adk web .
    ```
 
@@ -118,8 +120,8 @@ store the Databricks OAuth service-principal values in Secret Manager and inject
 the ADK runtime. `DatabricksOAuth` uses the same SDK credential discovery and
 attaches a short-lived token to both Agent Card and A2A JSON-RPC requests.
 
-Do not pass the end user's Databricks token through Google unless the customer
-specifically requires user-level Unity Catalog enforcement. This sample uses a
+Do not pass the end user's Databricks token through Google unless the deployment
+requires user-level Unity Catalog enforcement. This sample uses a
 service identity at the A2A boundary and the Databricks App service principal
 for internal Databricks resources.
 

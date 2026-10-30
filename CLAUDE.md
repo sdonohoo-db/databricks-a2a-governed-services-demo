@@ -9,8 +9,8 @@ A reference implementation showing a Google ADK/Gemini orchestrator consuming Da
 - `src/a2a-provider/server.py` — composes the A2A `AgentCard` and mounts JSON-RPC + agent-card routes on a `Starlette` app. The public interface URL is derived from reverse-proxy request headers; `DATABRICKS_APP_URL` is an optional local override.
 - `src/a2a-provider/agent_executor.py` — bridges A2A to a Unity Gateway model service and configured MCP servers. It propagates OpenTelemetry context, adds Gateway request tags, namespaces tool names, and supports multiple MCP calls for asynchronous DBSQL polling.
 - `src/a2a-client/` — a second Databricks App with a visual chat, architecture flow, Agent Card viewer, execution timeline, identity disclosure, and raw protocol metadata. Its backend binds the provider App with `CAN_USE`, resolves the provider URL using `WorkspaceClient`, and authenticates app-to-app as its own service principal.
-- `google_adk_consumer/` — the customer-side proof. Google ADK uses `RemoteA2aAgent` and an authenticated A2A `ClientFactory` to discover the Databricks Agent Card and delegate through standard A2A. `discover.py` prints the card before the demo.
-- `src/a2a-client/cli.py` — framework-neutral command-line validation client. Remote use requires an explicit `DATABRICKS_PROFILE`.
+- `src/google-adk-consumer/` — the external-client proof. Google ADK uses `RemoteA2aAgent` and an authenticated A2A `ClientFactory` to discover the Databricks Agent Card and delegate through standard A2A. `discover.py` prints the card before the demo.
+- `tools/framework-neutral-a2a-client/client.py` — framework-neutral command-line validation client. Remote use requires an explicit `DATABRICKS_PROFILE`.
 
 MCP configuration lives in `src/a2a-provider/databricks_config.py`. `MCP_BACKENDS` can select `genie`, `functions`, or both; legacy `MCP_BACKEND` remains supported.
 
@@ -50,8 +50,8 @@ In a separate shell, exercise the full path:
 
 ```bash
 UV_SYSTEM_CERTS=1 uv run --system-certs \
-  --with-requirements src/a2a-provider/requirements.txt \
-  python src/a2a-client/cli.py
+  --with-requirements tools/framework-neutral-a2a-client/requirements.txt \
+  python tools/framework-neutral-a2a-client/client.py
 ```
 
 `UV_NATIVE_TLS=1` is mandatory behind the corporate Zscaler proxy — without it `uv` rejects PyPI's cert as `UnknownIssuer`. Applies to every uv-driven command in this repo, including `databricks apps run-local --prepare-environment`.

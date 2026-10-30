@@ -48,13 +48,13 @@ Create the Unity Catalog function used by the App:
 
 ```shell
 databricks experimental aitools tools query \
-  "$(python3 setup/render_demo_function.py \
+  "$(python3 scripts/render_demo_function.py \
       --function-name "<catalog>.<schema>.<function>")" \
   --profile <profile>
 ```
 
 The renderer applies the supplied three-part name to the sample shipping-quote
-function in `setup/create_demo_function.sql`. Use the same function name for
+function in `scripts/create_demo_function.sql`. Use the same function name for
 `uc_function_name` during deployment.
 
 ### 3. Enable MCP tracing
@@ -88,5 +88,8 @@ telemetry for the provider App, and configures the model, function, and SQL
 warehouse permissions. See [Governance and observability](docs/governance.md)
 for the one-time preview, tracing, and MCP access requirements.
 
-To exercise the provider using the Google A2A SDK without the visual client, see
+See the [demo walkthrough](docs/demo.md) for the complete discovery and
+delegation sequence.
+
+To exercise the provider without the visual client, see
 [Test with the framework-neutral A2A client](docs/framework-neutral-client.md).
