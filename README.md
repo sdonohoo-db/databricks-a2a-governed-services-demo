@@ -24,6 +24,11 @@ The foundation-model capability has a limited conversational scope covering
 A2A, MCP, Databricks AI and agent services, and enterprise agent architecture.
 The sample Unity Catalog function provides shipping quotes.
 
+This demo builds on Wenwen Xie's
+[Connecting A2A and MCP on Databricks Apps](https://www.linkedin.com/pulse/connecting-a2a-mcp-databricks-apps-practical-example-wenwen-xie-iuzye/)
+article and the accompanying
+[databricks_a2a_mcp_connection repository](https://github.com/vivian-xie-db/databricks_a2a_mcp_connection).
+
 ## Architecture
 
 ![A2A architecture](docs/a2a-architecture.png)
@@ -67,10 +72,3 @@ databricks apps deploy -t dev \
 
 To exercise the provider using the Google A2A SDK without the visual client, see
 [Test with the framework-neutral A2A client](docs/framework-neutral-client.md).
-
-## Credits
-
-This demo builds on Wenwen Xie's
-[Connecting A2A and MCP on Databricks Apps](https://www.linkedin.com/pulse/connecting-a2a-mcp-databricks-apps-practical-example-wenwen-xie-iuzye/)
-article and the accompanying
-[databricks_a2a_mcp_connection repository](https://github.com/vivian-xie-db/databricks_a2a_mcp_connection).
