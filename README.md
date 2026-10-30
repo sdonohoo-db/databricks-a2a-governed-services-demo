@@ -57,9 +57,9 @@ The renderer applies the supplied three-part name to the sample shipping-quote
 function in `setup/create_demo_function.sql`. Use the same function name for
 `uc_function_name` during deployment.
 
-### 3. Enable Unity Gateway tracing
+### 3. Enable MCP tracing
 
-A metastore admin must enable the unified trace table from **AI Gateway > Govern Traces**. This captures model and MCP activity across the metastore.
+To capture detailed MCP activity from system.ai.dbsql, a metastore admin must enable the unified trace table from **AI Gateway > Govern > Traces**. This is optional and is not required for the MCP service to function.
 
 ## Deploy
 
