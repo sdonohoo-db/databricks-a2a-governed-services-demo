@@ -4,10 +4,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A reference implementation showing a Google ADK/Gemini orchestrator consuming Databricks services through A2A (`a2a-sdk` 1.0). The bundle contains two Databricks Apps: a headless provider and a visual test client. Databricks keeps Model Serving plus managed MCP access to UC Functions (and optionally Genie) behind the provider's protocol boundary.
+A reference implementation showing a Google ADK/Gemini orchestrator consuming Databricks services through A2A (`a2a-sdk` 1.0). The bundle contains two Databricks Apps: a headless provider and a visual test client. The provider emits OpenTelemetry through Databricks Apps telemetry and uses Unity Gateway for its model and MCP calls.
 
 - `src/a2a-provider/server.py` — composes the A2A `AgentCard` and mounts JSON-RPC + agent-card routes on a `Starlette` app. The public interface URL is derived from reverse-proxy request headers; `DATABRICKS_APP_URL` is an optional local override.
-- `src/a2a-provider/agent_executor.py` — bridges A2A to Model Serving and every configured managed MCP server. It namespaces tool names and runs at most one tool call per request.
+- `src/a2a-provider/agent_executor.py` — bridges A2A to a Unity Gateway model service and configured MCP servers. It propagates OpenTelemetry context, adds Gateway request tags, namespaces tool names, and supports multiple MCP calls for asynchronous DBSQL polling.
 - `src/a2a-client/` — a second Databricks App with a visual chat, architecture flow, Agent Card viewer, execution timeline, identity disclosure, and raw protocol metadata. Its backend binds the provider App with `CAN_USE`, resolves the provider URL using `WorkspaceClient`, and authenticates app-to-app as its own service principal.
 - `google_adk_consumer/` — the customer-side proof. Google ADK uses `RemoteA2aAgent` and an authenticated A2A `ClientFactory` to discover the Databricks Agent Card and delegate through standard A2A. `discover.py` prints the card before the demo.
 - `src/a2a-client/cli.py` — framework-neutral command-line validation client. Remote use requires an explicit `DATABRICKS_PROFILE`.
@@ -16,7 +16,7 @@ MCP configuration lives in `src/a2a-provider/databricks_config.py`. `MCP_BACKEND
 
 ## Local run
 
-UC functions backend:
+Governed UC functions backend:
 
 ```bash
 cd src/a2a-provider
@@ -24,9 +24,10 @@ UV_NATIVE_TLS=1 databricks apps run-local \
   --prepare-environment \
   --env DATABRICKS_APP_URL=http://localhost:8000 \
   --env MCP_BACKEND=functions \
-  --env UC_FUNCTIONS_CATALOG=<catalog> \
-  --env UC_FUNCTIONS_SCHEMA=<schema> \
-  --env LLM_ENDPOINT_NAME=<chat-endpoint> \
+  --env MCP_SERVICE_NAME=system.ai.dbsql \
+  --env UC_FUNCTION_NAME=<catalog>.<schema>.<function> \
+  --env MODEL_SERVICE_NAME=<catalog>.<schema>.<model-service> \
+  --env DATABRICKS_WAREHOUSE_ID=<warehouse-id> \
   -p <profile>
 ```
 
@@ -39,7 +40,7 @@ UV_NATIVE_TLS=1 databricks apps run-local \
   --env DATABRICKS_APP_URL=http://localhost:8000 \
   --env MCP_BACKEND=genie \
   --env GENIE_SPACE_ID=<space-id> \
-  --env LLM_ENDPOINT_NAME=<chat-endpoint> \
+  --env MODEL_SERVICE_NAME=<catalog>.<schema>.<model-service> \
   -p <profile>
 ```
 
@@ -60,11 +61,12 @@ UV_SYSTEM_CERTS=1 uv run --system-certs \
 The provider and client have separate requirements files. Do not merge them: the provider needs MLflow/MCP while the visual client only needs A2A, the SDK, HTTP, and Starlette.
 
 - `a2a-sdk[http-server]==1.0.3` — the `[http-server]` extra is required (pulls `sse-starlette`); pure `a2a-sdk` will import-fail at server start.
-- `databricks-sdk[openai]>=0.57.0` — the `[openai]` extra is required because the provider executor calls `ws.serving_endpoints.get_open_ai_client()`.
+- `databricks-sdk[openai]>=0.57.0` — the `[openai]` extra provides the OpenAI client used with the Unity Gateway API.
 - `databricks-mcp==0.9.2` — current Databricks MCP client.
 - `mcp>=1.30.0,<2` — required directly by `agent_executor.py`. The upper bound
   preserves the 1.x `streamablehttp_client` API used by both this sample and
   `databricks-mcp`; 1.30.0 also includes the current 1.x transport security fix.
+- OpenTelemetry dependencies provide Starlette/HTTPX instrumentation, OTLP export, and host metrics for Databricks Apps telemetry.
 - Direct deps only beyond that: `mlflow-skinny`, `python-dotenv`, `httpx`, `pydantic`, `uvicorn`. Let the resolver pick versions.
 
 ## A2A 1.0 surface (do not regress to 0.2.x)
@@ -82,15 +84,14 @@ Types are protobuf-backed, not Pydantic. There is no `model_dump`, no arbitrary 
 
 The default agent-card path is `/.well-known/agent-card.json` (with hyphen) — older clients/docs use `agent.json`.
 
-## LLM endpoint
+## Unity Gateway
 
-`LLM_ENDPOINT_NAME` in `src/a2a-provider/agent_executor.py` must name a chat-capable endpoint that exists in the target workspace. It is required and has no repository default.
+`MODEL_SERVICE_NAME` is a three-part Unity Gateway model service name. The bundle creates this service, routes it to the selected `system.ai` foundation model, and enables its inference table.
 
-```bash
-databricks serving-endpoints list -p <profile> --output json | \
-  jq '.[] | select(.task=="llm/v1/chat" and .state.ready=="READY") | .name'
-```
+The deployed functions path uses the governed `system.ai.dbsql` MCP service and passes `DATABRICKS_WAREHOUSE_ID` through MCP `_meta`. It calls `UC_FUNCTION_NAME` using SQL. MCP request and response payloads are captured by the metastore-level Unity Gateway unified trace table, not a per-service inference table.
+
+Databricks Apps telemetry is configured on the provider App only. Logs, spans, and metrics are written to the three DAB-configured `otel_*` tables.
 
 ## Deploying to Databricks Apps
 
-`databricks.yml` defines both Apps without workspace-specific defaults. The deployer must supply app names, a UC function FQN, and a Model Serving endpoint. The provider gets Model Serving `CAN_QUERY` and UC Function `EXECUTE`. The visual client gets provider-App `CAN_USE`; its backend resolves the bound App name to a URL and calls it with `WorkspaceClient().config.authenticate()`. See `README.md` for deployment and `DEMO.md` for the visual proof sequence.
+`databricks.yml` defines both Apps, the Unity Gateway model service and inference table, provider App telemetry, the model-service binding, UC Function access, and SQL warehouse access. The built-in `system.ai.dbsql` service and the metastore unified trace table are platform resources and cannot be created by this bundle. See `README.md` and `docs/governance.md` for deployment requirements.

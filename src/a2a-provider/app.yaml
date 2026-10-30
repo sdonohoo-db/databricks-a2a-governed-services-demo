@@ -1,4 +1,5 @@
 command:
+- "opentelemetry-instrument"
 - "python"
 - "server.py"
 
@@ -6,9 +7,15 @@ command:
 # override these values with `databricks apps run-local --env KEY=VALUE` as
 # shown in README.md.
 env:
+- name: "OTEL_TRACES_SAMPLER"
+  value: "always_on"
 - name: "MCP_BACKENDS"
   value: "functions"
+- name: "MCP_SERVICE_NAME"
+  value: "system.ai.dbsql"
 - name: "UC_FUNCTION_NAME"
   valueFrom: "uc-function"
-- name: "LLM_ENDPOINT_NAME"
-  valueFrom: "serving-endpoint"
+- name: "MODEL_SERVICE_NAME"
+  valueFrom: "model-service"
+- name: "DATABRICKS_WAREHOUSE_ID"
+  valueFrom: "sql-warehouse"

@@ -8,36 +8,80 @@ variables:
     description: Required workspace-global name for the A2A demonstration client App
   uc_function_name:
     description: Required existing UC function FQN (catalog.schema.function)
-  llm_endpoint_name:
-    description: Required chat-capable Model Serving endpoint name
-
+  governance_catalog:
+    description: Existing catalog for the Unity Gateway model service and telemetry tables
+  governance_schema:
+    description: Existing schema for the Unity Gateway model service and telemetry tables
+  foundation_model_resource_name:
+    description: Three-part backing model resource name (for example system.ai.databricks-claude-sonnet-5-5)
+  model_service_name:
+    description: Name for the DAB-managed Unity Gateway model service
+  model_inference_table_prefix:
+    description: Prefix for the model service inference table
+  telemetry_table_prefix:
+    description: Prefix for the A2A provider App telemetry tables
+  sql_warehouse_id:
+    description: SQL warehouse used by the governed system.ai.dbsql MCP service
 resources:
+  model_services:
+    a2a_model:
+      parent: schemas/${var.governance_catalog}.${var.governance_schema}
+      model_service_id: ${var.model_service_name}
+      comment: Governed foundation model used by the Databricks A2A provider
+      config:
+        routing:
+          destinations:
+            - name: primary
+              destination_type: DESTINATION_TYPE_PAY_PER_TOKEN_FOUNDATION_MODEL
+              pay_per_token_config:
+                model: models/${var.foundation_model_resource_name}
+        inference_table:
+          parent: schemas/${var.governance_catalog}.${var.governance_schema}
+          table_name_prefix: ${var.model_inference_table_prefix}
+
   apps:
     a2a_elements:
       name: ${var.provider_app_name}
-      description: A2A interface over Databricks Model Serving and UC Functions MCP
+      description: A2A interface over Unity Gateway model and MCP services
       source_code_path: ./src/a2a-provider
       config:
         command:
+          - opentelemetry-instrument
           - python
           - server.py
         env:
+          - name: OTEL_TRACES_SAMPLER
+            value: always_on
           - name: MCP_BACKENDS
             value: functions
+          - name: MCP_SERVICE_NAME
+            value: system.ai.dbsql
           - name: UC_FUNCTION_NAME
             value_from: uc-function
-          - name: LLM_ENDPOINT_NAME
-            value_from: serving-endpoint
+          - name: MODEL_SERVICE_NAME
+            value_from: model-service
+          - name: DATABRICKS_WAREHOUSE_ID
+            value_from: sql-warehouse
       resources:
-        - name: serving-endpoint
-          serving_endpoint:
-            name: ${var.llm_endpoint_name}
-            permission: CAN_QUERY
+        - name: model-service
+          uc_securable:
+            securable_type: MODEL_SERVICE
+            securable_full_name: ${var.governance_catalog}.${var.governance_schema}.${resources.model_services.a2a_model.model_service_id}
+            permission: EXECUTE
         - name: uc-function
           uc_securable:
             securable_type: FUNCTION
             securable_full_name: ${var.uc_function_name}
             permission: EXECUTE
+        - name: sql-warehouse
+          sql_warehouse:
+            id: ${var.sql_warehouse_id}
+            permission: CAN_USE
+      telemetry_export_destinations:
+        - unity_catalog:
+            logs_table: ${var.governance_catalog}.${var.governance_schema}.${var.telemetry_table_prefix}_otel_logs
+            metrics_table: ${var.governance_catalog}.${var.governance_schema}.${var.telemetry_table_prefix}_otel_metrics
+            traces_table: ${var.governance_catalog}.${var.governance_schema}.${var.telemetry_table_prefix}_otel_spans
       lifecycle:
         started: true
 

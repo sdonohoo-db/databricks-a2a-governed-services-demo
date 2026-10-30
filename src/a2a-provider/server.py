@@ -35,10 +35,10 @@ def _agent_skills() -> list[AgentSkill]:
             id="databricks-foundation-model",
             name="Databricks interoperability advisor",
             description=(
-                "Uses a Databricks foundation model to discuss A2A, MCP, "
+                "Uses a Unity Gateway model service to discuss A2A, MCP, "
                 "Databricks AI and agent services, and enterprise agent "
-                "architecture. Questions outside this conversational scope "
-                "are declined."
+                "architecture. Requests and responses are logged through the "
+                "model service. Questions outside this scope are declined."
             ),
             tags=["llm", "model-serving", "databricks"],
             examples=[
@@ -68,8 +68,8 @@ def _agent_skills() -> list[AgentSkill]:
                 id="uc-tools",
                 name="Run Unity Catalog functions",
                 description=(
-                    "Invokes authorized UC functions through the "
-                    "Databricks-managed MCP server."
+                    "Invokes authorized UC functions through the governed "
+                    "Unity Gateway Databricks SQL MCP service."
                 ),
                 tags=["unity-catalog", "functions", "mcp", "databricks"],
                 examples=[
@@ -87,9 +87,11 @@ def _agent_card(public_url: str) -> AgentCard:
         name="databricks-enterprise-services",
         description=(
             "A standards-based A2A interface through which external enterprise "
-            "agents can consume Databricks AI, data, and function services."
+            "agents can consume Databricks AI, data, and function services. "
+            "The provider emits OpenTelemetry and uses Unity Gateway for "
+            "downstream model and MCP access."
         ),
-        version="1.1.0",
+        version="1.2.0",
         default_input_modes=["text"],
         default_output_modes=["text"],
         capabilities=AgentCapabilities(streaming=True),
