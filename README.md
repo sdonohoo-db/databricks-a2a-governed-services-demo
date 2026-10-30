@@ -59,8 +59,7 @@ function in `setup/create_demo_function.sql`. Use the same function name for
 
 ### 3. Enable Unity Gateway tracing
 
-A metastore admin must enable the unified trace table from **AI Gateway > Govern
-> Traces**. This captures model and MCP activity across the metastore.
+A metastore admin must enable the unified trace table from **AI Gateway > Govern Traces**. This captures model and MCP activity across the metastore.
 
 ## Deploy
 
