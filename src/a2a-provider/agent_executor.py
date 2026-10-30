@@ -1,4 +1,5 @@
 import asyncio
+import contextvars
 import json
 import os
 import uuid
@@ -10,8 +11,11 @@ from databricks.sdk import WorkspaceClient
 from databricks_mcp import DatabricksOAuthClientProvider
 from mcp.client.session import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
+from mcp.types import CallToolRequest, CallToolResult
 from mlflow.pyfunc import ResponsesAgent
 from mlflow.types.responses import ResponsesAgentRequest, ResponsesAgentResponse
+from openai import OpenAI
+from opentelemetry import trace
 from pydantic import BaseModel
 
 from a2a.helpers import new_text_message
@@ -41,6 +45,8 @@ TOOL_SKILL_TO_SERVER = {
     "uc-tools": "functions",
     "genie": "genie",
 }
+MAX_TOOL_ROUNDS = 6
+tracer = trace.get_tracer("databricks.a2a.provider")
 
 
 def _decode_demo_request(user_input: str) -> tuple[str, str | None]:
@@ -123,19 +129,31 @@ def _list_tools(server_url: str, ws: WorkspaceClient):
         async with _mcp_session(server_url, ws) as sess:
             return await sess.list_tools()
 
-    return asyncio.run(inner())
+    with tracer.start_as_current_span("unity_gateway.mcp.list_tools") as span:
+        span.set_attribute("mcp.server_url", server_url)
+        return asyncio.run(inner())
 
 
 def _make_exec_fn(
-    server_url: str, tool_name: str, ws: WorkspaceClient
+    server: MCPServerConfig, tool_name: str, ws: WorkspaceClient
 ) -> Callable[..., str]:
     def exec_fn(**kwargs):
         async def call_it():
-            async with _mcp_session(server_url, ws) as sess:
-                resp = await sess.call_tool(name=tool_name, arguments=kwargs)
+            async with _mcp_session(server.url, ws) as sess:
+                params: dict[str, Any] = {
+                    "name": tool_name,
+                    "arguments": kwargs,
+                }
+                if server.call_meta:
+                    params["_meta"] = dict(server.call_meta)
+                request = CallToolRequest(method="tools/call", params=params)
+                resp = await sess.send_request(request, CallToolResult)
                 return "".join([c.text for c in resp.content])
 
-        return asyncio.run(call_it())
+        with tracer.start_as_current_span("unity_gateway.mcp.call_tool") as span:
+            span.set_attribute("mcp.service", server.display_name)
+            span.set_attribute("mcp.tool.name", tool_name)
+            return asyncio.run(call_it())
 
     return exec_fn
 
@@ -168,32 +186,69 @@ def _fetch_tool_infos(ws: WorkspaceClient, server: MCPServerConfig) -> List[Tool
                 server_key=server.key,
                 name=exposed_name,
                 spec=spec,
-                exec_fn=_make_exec_fn(server.url, t.name, ws),
+                exec_fn=_make_exec_fn(server, t.name, ws),
             )
         )
     return infos
 
 
 class SingleTurnMCPAgent(ResponsesAgent):
-    def _call_llm(self, history: List[dict], ws: WorkspaceClient, tool_infos):
-        client = ws.serving_endpoints.get_open_ai_client()
+    def _call_llm(
+        self,
+        history: List[dict],
+        ws: WorkspaceClient,
+        tool_infos,
+        request_tags: dict[str, str],
+    ):
+        auth_header = ws.config.authenticate().get("Authorization", "")
+        token = auth_header.removeprefix("Bearer ")
+        client = OpenAI(
+            api_key=token,
+            base_url=f"{ws.config.host.rstrip('/')}/ai-gateway/mlflow/v1",
+        )
         flat_msgs = []
         for msg in history:
             flat_msgs.extend(_to_chat_messages(msg))
 
-        return client.chat.completions.create(
-            model=os.environ["LLM_ENDPOINT_NAME"],
-            messages=flat_msgs,
-            **({"tools": [ti.spec for ti in tool_infos]} if tool_infos else {}),
-        )
+        with tracer.start_as_current_span("unity_gateway.model.invoke") as span:
+            span.set_attribute("gen_ai.request.model", os.environ["MODEL_SERVICE_NAME"])
+            return client.chat.completions.create(
+                model=os.environ["MODEL_SERVICE_NAME"],
+                messages=flat_msgs,
+                extra_headers={
+                    "Databricks-Ai-Gateway-Request-Tags": json.dumps(request_tags)
+                },
+                **({"tools": [ti.spec for ti in tool_infos]} if tool_infos else {}),
+            )
 
     def predict(self, request: ResponsesAgentRequest) -> ResponsesAgentResponse:
-        ws = WorkspaceClient()
         custom_inputs = request.custom_inputs or {}
         selected_skill_id = custom_inputs.get("selected_skill_id")
         if not isinstance(selected_skill_id, str):
             selected_skill_id = None
+        request_id = custom_inputs.get("a2a_request_id")
+        if not isinstance(request_id, str):
+            request_id = uuid.uuid4().hex
+        request_tags = {
+            "application": "databricks-a2a-provider",
+            "a2a_request_id": request_id,
+            "a2a_skill": selected_skill_id or "autonomous",
+        }
 
+        with tracer.start_as_current_span("a2a.agent.predict") as predict_span:
+            predict_span.set_attribute("a2a.request.id", request_id)
+            predict_span.set_attribute(
+                "a2a.skill.id", selected_skill_id or "autonomous"
+            )
+            return self._predict(request, selected_skill_id, request_tags)
+
+    def _predict(
+        self,
+        request: ResponsesAgentRequest,
+        selected_skill_id: str | None,
+        request_tags: dict[str, str],
+    ) -> ResponsesAgentResponse:
+        ws = WorkspaceClient()
         history: List[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
         for inp in request.input:
             history.append(inp.model_dump())
@@ -218,6 +273,8 @@ class SingleTurnMCPAgent(ResponsesAgent):
                     "content": (
                         "The client selected a tool-backed capability. Call an "
                         "available tool only when it can genuinely satisfy the task. "
+                        f"For shipping quotes, use SQL to call the Unity Catalog "
+                        f"function {os.environ.get('UC_FUNCTION_NAME', '')}. "
                         "Do not answer from general model knowledge. If no tool is "
                         "suitable, do not call a tool; the host will return a "
                         "deterministic capability-mismatch response."
@@ -236,13 +293,24 @@ class SingleTurnMCPAgent(ResponsesAgent):
                 for tool_info in _fetch_tool_infos(ws, server)
             ]
         tools_dict = {tool_info.name: tool_info for tool_info in tool_infos}
-        llm_resp = self._call_llm(history, ws, tool_infos)
-        raw_choice = llm_resp.choices[0].message.to_dict()
-        raw_choice["id"] = uuid.uuid4().hex
-        history.append(raw_choice)
+        tool_invoked = False
+        raw_choice: dict[str, Any] = {}
+        for _ in range(MAX_TOOL_ROUNDS):
+            llm_resp = self._call_llm(
+                history,
+                ws,
+                tool_infos,
+                request_tags,
+            )
+            raw_choice = llm_resp.choices[0].message.to_dict()
+            raw_choice["id"] = uuid.uuid4().hex
+            history.append(raw_choice)
 
-        tool_calls = raw_choice.get("tool_calls") or []
-        if tool_calls:
+            tool_calls = raw_choice.get("tool_calls") or []
+            if not tool_calls:
+                break
+
+            tool_invoked = True
             fc = tool_calls[0]
             name = fc["function"]["name"]
             args = json.loads(fc["function"]["arguments"])
@@ -261,24 +329,12 @@ class SingleTurnMCPAgent(ResponsesAgent):
                     "output": result,
                 }
             )
-
-            followup = (
-                self._call_llm(history, ws, tool_infos=[]).choices[0].message.to_dict()
-            )
-            followup["id"] = uuid.uuid4().hex
-
-            assistant_text = followup.get("content", "")
-            return ResponsesAgentResponse(
-                output=[
-                    self.create_text_output_item(
-                        text=assistant_text,
-                        id=uuid.uuid4().hex,
-                    )
-                ],
-                custom_outputs=request.custom_inputs,
+        else:
+            return self._text_response(
+                "The selected capability exceeded the maximum number of tool calls."
             )
 
-        if selected_server:
+        if selected_server and not tool_invoked:
             return self._text_response(
                 "This request cannot be answered using the selected Databricks "
                 "tool-backed capability. No suitable MCP tool was invoked. Choose "
@@ -318,14 +374,25 @@ class DatabricksMCPAgentExecutor(AgentExecutor):
         event_queue: EventQueue,
     ) -> None:
         task, selected_skill_id = _decode_demo_request(context.get_user_input())
+        request_id = uuid.uuid4().hex
         req = ResponsesAgentRequest(
             input=[{"role": "user", "content": task}],
-            custom_inputs={"selected_skill_id": selected_skill_id}
-            if selected_skill_id
-            else None,
+            custom_inputs={
+                "selected_skill_id": selected_skill_id,
+                "a2a_request_id": request_id,
+            },
         )
-        loop = asyncio.get_running_loop()
-        resp = await loop.run_in_executor(None, SingleTurnMCPAgent().predict, req)
+        with tracer.start_as_current_span("a2a.request.execute") as span:
+            span.set_attribute("a2a.request.id", request_id)
+            span.set_attribute("a2a.skill.id", selected_skill_id or "autonomous")
+            loop = asyncio.get_running_loop()
+            copied_context = contextvars.copy_context()
+            resp = await loop.run_in_executor(
+                None,
+                copied_context.run,
+                SingleTurnMCPAgent().predict,
+                req,
+            )
 
         result = ""
         for item in resp.output:

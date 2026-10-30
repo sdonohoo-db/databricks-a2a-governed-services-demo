@@ -12,11 +12,10 @@ Google ADK + Gemini
         |
         | A2A: discover card, delegate task, receive answer
         v
-Databricks App (A2A provider)
+Databricks App (A2A provider + App telemetry)
         |
-        +-- Databricks Model Serving
-        +-- Managed MCP -> Unity Catalog functions
-        +-- Optional managed MCP -> Genie
+        +-- Unity Gateway model service -> Databricks-hosted model
+        +-- Unity Gateway DBSQL MCP -> Unity Catalog function
 ```
 
 The bundle also deploys a visual A2A client App for rehearsal and customer
@@ -60,7 +59,7 @@ external client, while displaying each observed stage and the architecture.
      python -m google_adk_consumer.discover
    ```
 
-   Point out the advertised Model Serving and UC-function skills and the JSON-RPC interface URL. If Genie is enabled, it appears as a third skill. This
+   Point out the advertised model-service and UC-function skills and the JSON-RPC interface URL. If Genie is enabled, it appears as a third skill. This
    proves discovery happens through the A2A card rather than prior knowledge in
    the Google agent.
 
@@ -106,6 +105,8 @@ Use prompts tied to the actual configured Genie space and UC function.
    - Google Gemini chose and delegated to a remote sub-agent.
    - The only cross-platform contract was A2A.
    - Databricks resolved its own tools behind the boundary.
+   - App telemetry captured the A2A request and routing decision.
+   - Unity Gateway captured the downstream model and MCP interactions.
    - The Google orchestrator did not receive Databricks credentials for internal
      services, table grants, MCP tool definitions, or function implementation.
 
@@ -130,5 +131,7 @@ The demo is successful when all of these are visible:
 - The card describes capabilities and the standard JSON-RPC interface.
 - Google ADK delegates to `databricks_enterprise_services`.
 - A Databricks-backed answer returns through A2A.
+- The provider request is visible in the App telemetry tables.
+- The model and MCP calls are visible in Unity Gateway traces.
 - Changing the internal Databricks implementation does not require changing the
   Google orchestrator's protocol integration.

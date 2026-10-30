@@ -45,6 +45,24 @@ class MCPConfigurationTests(unittest.TestCase):
         )
         self.assertEqual([config.key for config in configs], ["functions"])
 
+    def test_unity_gateway_mcp_backend(self):
+        configs = build_mcp_server_configs(
+            {
+                "MCP_BACKENDS": "functions",
+                "MCP_SERVICE_NAME": "system.ai.dbsql",
+                "DATABRICKS_WAREHOUSE_ID": "warehouse-123",
+                "UC_FUNCTION_NAME": "catalog.schema.demo_function",
+            },
+            workspace_host="https://example.cloud.databricks.com/",
+        )
+
+        self.assertEqual(len(configs), 1)
+        self.assertEqual(
+            configs[0].url,
+            "https://example.cloud.databricks.com/ai-gateway/mcp-services/system.ai.dbsql",
+        )
+        self.assertEqual(configs[0].call_meta, {"warehouse_id": "warehouse-123"})
+
     def test_invalid_function_name(self):
         with self.assertRaisesRegex(RuntimeError, "three-part name"):
             build_mcp_server_configs(

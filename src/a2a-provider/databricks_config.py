@@ -1,7 +1,7 @@
 import hashlib
 import re
 from dataclasses import dataclass
-from typing import Mapping
+from typing import Any, Mapping
 
 
 @dataclass(frozen=True)
@@ -9,6 +9,7 @@ class MCPServerConfig:
     key: str
     display_name: str
     url: str
+    call_meta: Mapping[str, Any] | None = None
 
 
 def _uc_scope(env: Mapping[str, str]) -> tuple[str | None, str | None]:
@@ -78,13 +79,39 @@ def build_mcp_server_configs(
                     "The functions backend requires UC_FUNCTION_NAME or both "
                     "UC_FUNCTIONS_CATALOG and UC_FUNCTIONS_SCHEMA."
                 )
-            configs.append(
-                MCPServerConfig(
-                    key="functions",
-                    display_name=f"Unity Catalog functions ({catalog}.{schema})",
-                    url=f"{workspace_host}/api/2.0/mcp/functions/{catalog}/{schema}",
+            mcp_service_name = env.get("MCP_SERVICE_NAME")
+            if mcp_service_name:
+                warehouse_id = env.get("DATABRICKS_WAREHOUSE_ID")
+                configs.append(
+                    MCPServerConfig(
+                        key="functions",
+                        display_name=(
+                            f"Unity Gateway MCP service ({mcp_service_name})"
+                        ),
+                        url=(
+                            f"{workspace_host}/ai-gateway/mcp-services/"
+                            f"{mcp_service_name}"
+                        ),
+                        call_meta=(
+                            {"warehouse_id": warehouse_id}
+                            if warehouse_id
+                            else None
+                        ),
+                    )
                 )
-            )
+            else:
+                configs.append(
+                    MCPServerConfig(
+                        key="functions",
+                        display_name=(
+                            f"Unity Catalog functions ({catalog}.{schema})"
+                        ),
+                        url=(
+                            f"{workspace_host}/api/2.0/mcp/functions/"
+                            f"{catalog}/{schema}"
+                        ),
+                    )
+                )
     return configs
 
 
